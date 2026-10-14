@@ -1,20 +1,26 @@
 {
-  "verified_at": "2026-10-15T00:09:43.044469+05:30",
+  "verified_at": "2026-10-14T19:26:07.469601+00:00",
   "host_python": "3.12.14",
   "sandbox_python": "3.11",
-  "tests_passed": 94,
+  "tests_passed": 148,
   "tests_skipped": 0,
   "live_ollama_verified": true,
   "live_workflow_verified": false,
   "test_batches": {
-    "sandbox_and_artifacts": 24,
-    "remaining_suite": 70
+    "test-results.xml": {
+      "passed": 133,
+      "skipped": 0
+    },
+    "test-results-docker.xml": {
+      "passed": 15,
+      "skipped": 0
+    }
   },
-  "junit_report_scope": "test-results.xml records the 70-test batch. The 24-test batch was terminal verified.",
+  "junit_report_scope": "Local JUnit reports cover the full non-Docker suite and all opted-in Docker integration tests. Reports are excluded from Git and the source ZIP.",
   "sandbox_image_id": "sha256:f2243d2448f27825a1532c3937f11fc96614b5f39581e438ac9451295a01d2db",
   "sandbox_python_version": "3.11.17",
   "memory_limit_note": "Cgroup RAM, zero swappiness and per-process hard RLIMIT_AS tested. Kernel lacks aggregate swap accounting.",
-  "live_ollama_note": "Actual local text generation and the workbench adapter's structured response were verified. The full live-model solution workflow remains unverified.",
+  "live_ollama_note": "See live-workflow-verification.json for actual live attempts and separately labelled manual recovery.",
   "ui_verification": "Streamlit AppTest and HTTP health 200. Screenshot inspection unavailable because no browser surface was available.",
   "demos": [
     {
@@ -135,6 +141,24 @@
       "error": null
     },
     "inference_verified": true,
-    "full_workbench_workflow_verified_with_live_model": false
-  }
+    "full_workbench_workflow_verified_with_live_model": false,
+    "compatible_api_verification": {
+      "provider": "openai_compatible",
+      "server": "Ollama 0.40.4 compatible API",
+      "base_url": "http://127.0.0.1:11434/v1",
+      "model": "llama3.1:8b",
+      "structured_mode": "json_schema",
+      "health_available": true,
+      "structured_response": {
+        "status": "ready",
+        "count": 3
+      },
+      "elapsed_seconds": 13.83,
+      "inference_verified": true,
+      "scope": "Actual scripts/check_model.py --generate output. Bionic and Gemma were not installed or tested on this host."
+    }
+  },
+  "live_compatible_api_verified": true,
+  "bionic_gemma_verified": false,
+  "live_workflow_verification_report": "live-workflow-verification.json"
 }

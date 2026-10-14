@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import json
 import os
 import re
@@ -496,7 +495,9 @@ class Workflow:
             if path.suffix.lower() not in {".py", ".sql", ".json", ".txt", ".md", ".yaml", ".yml"}:
                 raise ValueError("Unsupported generated source extension")
             if path.suffix.lower() == ".py":
-                ast.parse(file.content, filename=file.path)
+                # Compilation checks statement scope as well as syntax (for
+                # example, a module-level return). Never execute the code object.
+                compile(file.content, file.path, "exec", dont_inherit=True)
         return value.model_copy(update={"expected_outputs": approved.expected_outputs})
 
     def _write_build(self, workspace: Path, state: GraphState, build: BuildResult, attempt: int) -> None:

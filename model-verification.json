@@ -46,5 +46,20 @@
     "error": null
   },
   "inference_verified": true,
-  "full_workbench_workflow_verified_with_live_model": false
+  "full_workbench_workflow_verified_with_live_model": false,
+  "compatible_api_verification": {
+    "provider": "openai_compatible",
+    "server": "Ollama 0.40.4 compatible API",
+    "base_url": "http://127.0.0.1:11434/v1",
+    "model": "llama3.1:8b",
+    "structured_mode": "json_schema",
+    "health_available": true,
+    "structured_response": {
+      "status": "ready",
+      "count": 3
+    },
+    "elapsed_seconds": 13.83,
+    "inference_verified": true,
+    "scope": "Actual scripts/check_model.py --generate output. Bionic and Gemma were not installed or tested on this host."
+  }
 }

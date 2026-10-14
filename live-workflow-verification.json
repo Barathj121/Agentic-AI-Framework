@@ -1,0 +1,128 @@
+{
+  "recorded_at": "2026-10-14T19:26:07.469601+00:00",
+  "live_model": "llama3.1:8b",
+  "cpu_only": true,
+  "full_live_workflow_passed": false,
+  "live_attempts": [
+    {
+      "workspace_id": "uc_20261014_184827_3369b81b12",
+      "status": "FAILED",
+      "error": "LLMError: Ollama request timed out after 600s. Try a smaller local model or increase LLM_TIMEOUT_SECONDS.",
+      "model": "llama3.1:8b",
+      "real_model_used": true,
+      "llm_timeout_seconds": 600,
+      "llm_max_output_tokens": 4096,
+      "attempts": [
+        {
+          "attempt": 0,
+          "generation_error": {
+            "error": "SyntaxError: unterminated string literal (detected at line 11) (generated/solution.py, line 11)"
+          }
+        }
+      ],
+      "execution_success": false,
+      "validation_passed": false,
+      "independent_smoke_validation": {}
+    },
+    {
+      "workspace_id": "uc_20261014_191111_d52b40860a",
+      "status": "FAILED",
+      "error": "Container exited with code 1",
+      "model": "llama3.1:8b",
+      "real_model_used": true,
+      "llm_timeout_seconds": 600,
+      "llm_max_output_tokens": 2048,
+      "attempts": [
+        {
+          "attempt": 0,
+          "execution": {
+            "success": false,
+            "exit_code": 1,
+            "error": "Container exited with code 1"
+          },
+          "stderr_tail": "WARNING: Your kernel does not support swap limit capabilities or the cgroup is not mounted. Memory limited without swap.\nWARNING: Your kernel does not support memory swappiness capabilities or the cgroup is not mounted. Memory swappiness discarded.\n  File \"/workspace/generated/solution.py\", line 32\n    return {'results.customer_totals': {'customer_id': ['masked_ab861dc1', 'masked_9685eb76'], 'total_amount': [25, 20]}}\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nSyntaxError: 'return' outside function\n"
+        },
+        {
+          "attempt": 1,
+          "execution": {
+            "success": false,
+            "exit_code": 1,
+            "error": "Container exited with code 1"
+          },
+          "stderr_tail": "WARNING: Your kernel does not support swap limit capabilities or the cgroup is not mounted. Memory limited without swap.\nWARNING: Your kernel does not support memory swappiness capabilities or the cgroup is not mounted. Memory swappiness discarded.\nTraceback (most recent call last):\n  File \"/workspace/generated/solution.py\", line 17, in <module>\n    rows = conn.execute(\"SELECT * FROM results.customer_totals\").fetchall()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n_duckdb.ConnectionException: Connection Error: Connection already closed!\n"
+        },
+        {
+          "attempt": 2,
+          "execution": {
+            "success": false,
+            "exit_code": 1,
+            "error": "Container exited with code 1"
+          },
+          "stderr_tail": "WARNING: Your kernel does not support swap limit capabilities or the cgroup is not mounted. Memory limited without swap.\nWARNING: Your kernel does not support memory swappiness capabilities or the cgroup is not mounted. Memory swappiness discarded.\nTraceback (most recent call last):\n  File \"/workspace/generated/solution.py\", line 17, in <module>\n    rows = conn.execute(\"SELECT * FROM results.customer_totals\").fetchall()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n_duckdb.ConnectionException: Connection Error: Connection already closed!\n"
+        }
+      ],
+      "execution_success": false,
+      "validation_passed": false,
+      "independent_smoke_validation": {}
+    }
+  ],
+  "manual_recovery": {
+    "original_failed_workspace_id": "uc_20261014_184827_3369b81b12",
+    "original_status": "FAILED",
+    "original_workspace_unchanged": true,
+    "recovery_workspace_id": "uc_20261014_191057_8683260e3e",
+    "debug_workspace_id": "uc_20261014_191137_9233820af3",
+    "debug_status": "COMPLETED",
+    "repair_author": "Codex manual review",
+    "model_used_for_repair_or_debug_run": false,
+    "live_model_end_to_end_completion": false,
+    "execution_attempted": true,
+    "execution_success": true,
+    "execution_time_seconds": 7.70299999999952,
+    "generic_validation_passed": true,
+    "exact_customer_totals": {
+      "passed": true,
+      "expected": [
+        [
+          "C1",
+          25
+        ],
+        [
+          "C2",
+          45
+        ],
+        [
+          "C3",
+          65
+        ]
+      ],
+      "actual": [
+        [
+          "C1",
+          25
+        ],
+        [
+          "C2",
+          45
+        ],
+        [
+          "C3",
+          65
+        ]
+      ],
+      "query": "SELECT customer_id, total_amount FROM results.customer_totals ORDER BY customer_id",
+      "checked_at": "2026-10-14T19:12:31.928806+00:00",
+      "truncated": false,
+      "error": null
+    },
+    "solution_notebook_exists": true,
+    "unapproved_json_output_absent": true,
+    "docker_integration_regression": {
+      "passed": 15,
+      "failed": 0,
+      "errors": 0,
+      "report": "test-results-docker.xml"
+    }
+  },
+  "manual_recovery_is_autonomous_model_success": false
+}

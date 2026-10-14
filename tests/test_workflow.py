@@ -318,6 +318,31 @@ def test_syntax_error_repaired_before_any_execution(prepared):
     assert manager.read(workspace, "metadata/attempts/0/generation_error.json")["error"].startswith("SyntaxError")
 
 
+def test_statement_scope_error_is_repaired_without_host_execution(prepared):
+    settings, manager, workspace = prepared
+    sandbox = FixtureSandbox()
+    invalid_source = "return 1\n"
+    # The explicit fixture sandbox never evaluates source. This valid Python
+    # would fail immediately if the host precheck executed it instead of compiling.
+    repaired_source = "raise AssertionError('Generated code executed on the host')\n"
+    llm = FixtureLLM([*planning_responses(), build(code=invalid_source), build(code=repaired_source)])
+    workflow = Workflow(settings, llm=llm, sandbox=sandbox)
+    workflow.propose(workspace)
+    result = workflow.approve(workspace, "aggregate")
+
+    assert result["status"] == "COMPLETED", result.get("error")
+    assert sandbox.calls == [1]
+    error = manager.read(workspace, "metadata/attempts/0/generation_error.json")["error"]
+    assert error.startswith("SyntaxError")
+    assert "'return' outside function" in error
+    assert not (workspace / "metadata/attempts/0/execution.json").exists()
+    repair_context = json.loads(llm.calls[-1][2])
+    assert repair_context["generation_error"] == error
+    assert repair_context["current_files"][0]["content"] == invalid_source
+    assert repair_context["execution"] == {}
+    assert (workspace / "generated/solution.py").read_text(encoding="utf-8") == repaired_source
+
+
 def test_queued_proposal_cancellation_is_not_reset_by_worker(prepared):
     settings, _, workspace = prepared
     workflow = Workflow(settings, llm=FixtureLLM([]), sandbox=FixtureSandbox())
