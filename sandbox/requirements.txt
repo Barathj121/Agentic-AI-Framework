@@ -1,0 +1,14 @@
+duckdb>=1.2,<2
+pandas>=2.2,<3
+numpy>=1.26,<3
+pyarrow>=18,<24
+scipy>=1.14,<2
+scikit-learn>=1.5,<2
+networkx>=3.3,<4
+statsmodels>=0.14,<1
+matplotlib>=3.9,<4
+plotly>=5.24,<7
+joblib>=1.4,<2
+nbformat>=5.10,<6
+nbclient>=0.10,<1
+ipykernel>=6.29,<8

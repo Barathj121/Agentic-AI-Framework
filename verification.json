@@ -1,0 +1,140 @@
+{
+  "verified_at": "2026-10-15T00:09:43.044469+05:30",
+  "host_python": "3.12.14",
+  "sandbox_python": "3.11",
+  "tests_passed": 94,
+  "tests_skipped": 0,
+  "live_ollama_verified": true,
+  "live_workflow_verified": false,
+  "test_batches": {
+    "sandbox_and_artifacts": 24,
+    "remaining_suite": 70
+  },
+  "junit_report_scope": "test-results.xml records the 70-test batch. The 24-test batch was terminal verified.",
+  "sandbox_image_id": "sha256:f2243d2448f27825a1532c3937f11fc96614b5f39581e438ac9451295a01d2db",
+  "sandbox_python_version": "3.11.17",
+  "memory_limit_note": "Cgroup RAM, zero swappiness and per-process hard RLIMIT_AS tested. Kernel lacks aggregate swap accounting.",
+  "live_ollama_note": "Actual local text generation and the workbench adapter's structured response were verified. The full live-model solution workflow remains unverified.",
+  "ui_verification": "Streamlit AppTest and HTTP health 200. Screenshot inspection unavailable because no browser surface was available.",
+  "demos": [
+    {
+      "name": "FIXTURE DEMO \u00b7 SALES",
+      "workspace_id": "uc_20261014_170811_ce202d01f4",
+      "status": "COMPLETED",
+      "real_model_used": false,
+      "artifacts": 6,
+      "checks_passed": 7,
+      "checks_total": 7,
+      "registered_audit_rows": 6,
+      "computed_tables": [
+        {
+          "location": "results.monthly_sales",
+          "row_count": 4
+        }
+      ]
+    },
+    {
+      "name": "FIXTURE DEMO \u00b7 GRAPH",
+      "workspace_id": "uc_20261014_170805_fee17b5709",
+      "status": "COMPLETED",
+      "real_model_used": false,
+      "artifacts": 5,
+      "checks_passed": 5,
+      "checks_total": 5,
+      "registered_audit_rows": 5,
+      "computed_tables": [
+        {
+          "location": "results.account_connectivity",
+          "row_count": 11
+        },
+        {
+          "location": "results.transfer_edges",
+          "row_count": 10
+        }
+      ]
+    },
+    {
+      "name": "FIXTURE DEMO \u00b7 ML",
+      "workspace_id": "uc_20261014_170756_bca80f7149",
+      "status": "COMPLETED",
+      "real_model_used": false,
+      "artifacts": 6,
+      "checks_passed": 8,
+      "checks_total": 8,
+      "registered_audit_rows": 6,
+      "computed_tables": [
+        {
+          "location": "results.customer_scores",
+          "row_count": 10
+        }
+      ]
+    },
+    {
+      "name": "FIXTURE DEMO \u00b7 SQL",
+      "workspace_id": "uc_20261014_170750_45fa1b61c6",
+      "status": "COMPLETED",
+      "real_model_used": false,
+      "artifacts": 5,
+      "checks_passed": 4,
+      "checks_total": 4,
+      "registered_audit_rows": 5,
+      "computed_tables": [
+        {
+          "location": "results.transfer_activity",
+          "row_count": 10
+        }
+      ]
+    }
+  ],
+  "model_verification_report": "model-verification.json",
+  "model_verification": {
+    "verified_at": "2026-10-15T00:07:35.561348+05:30",
+    "model": "llama3.1:8b",
+    "installed_model": {
+      "name": "llama3.1:8b",
+      "model": "llama3.1:8b",
+      "modified_at": "2026-10-15T00:05:47.788832+05:30",
+      "size": 4920753328,
+      "digest": "46e0c10c039e019119339687c3c1757cc81b9da49709a3b3924863ba87ca666e",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "llama",
+        "families": [
+          "llama"
+        ],
+        "parameter_size": "8.0B",
+        "quantization_level": "Q4_K_M",
+        "context_length": 131072,
+        "embedding_length": 4096,
+        "runner": "ggml"
+      },
+      "capabilities": [
+        "completion",
+        "tools"
+      ]
+    },
+    "generation": {
+      "response": "READY",
+      "done": true,
+      "seconds": 8.78,
+      "eval_count": 2
+    },
+    "workbench_structured_response": {
+      "status": "ready",
+      "count": 3
+    },
+    "workbench_structured_seconds": 9.33,
+    "workbench_health": {
+      "available": true,
+      "model_available": true,
+      "model": "llama3.1:8b",
+      "models": [
+        "llama3.1:8b"
+      ],
+      "error": null
+    },
+    "inference_verified": true,
+    "full_workbench_workflow_verified_with_live_model": false
+  }
+}

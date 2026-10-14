@@ -1,0 +1,19 @@
+{
+  "synthetic": true,
+  "seed": 42,
+  "banking_rows": 10000,
+  "sales_rows": 5000,
+  "currency": "Synthetic common currency units; amounts are comparable within each dataset.",
+  "annotations": "Kept separate from features. Injected patterns do not establish financial crime or real-world model quality.",
+  "banking_patterns": [
+    "large_amount",
+    "repeated_small_transfers",
+    "high_frequency",
+    "behavior_shift",
+    "common_destination"
+  ],
+  "sales_patterns": [
+    "South-region electronics quantity rises from July",
+    "Q4 discounts are higher"
+  ]
+}

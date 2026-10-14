@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-data-workbench"
+version = "0.1.0"
+description = "Local-first approved, executed and validated data solutions"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+include = ["workbench*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["docker: requires running Docker and prebuilt sandbox", "live_ollama: requires a real downloaded Ollama model"]
+filterwarnings = ["ignore::DeprecationWarning:dateutil"]
