@@ -473,10 +473,12 @@ def main() -> None:
             st.caption("No workspace selected")
         with st.expander("Local environment"):
             diagnostics = st.session_state.get("diagnostics", {})
-            for name, label, required_key in [("ollama", "Ollama model", "model_available"), ("docker", "Docker image", "image_available")]:
-                detail = diagnostics.get(name, {})
+            for name, label, required_key in [("llm", "Local model", "model_available"), ("docker", "Docker image", "image_available")]:
+                detail = diagnostics.get(name, diagnostics.get("ollama", {}) if name == "llm" else {})
                 ready = detail.get("available", False) and detail.get(required_key, False)
                 st.caption(f"{'✓' if ready else '○'} {label}: {'ready' if ready else 'needs attention'}")
+            if diagnostics.get("provider"):
+                st.caption(f"{diagnostics['provider']} · {diagnostics.get('model', '')}")
             st.caption("Check model and sandbox availability before starting implementation.")
             if st.button("Check services"):
                 with st.spinner("Checking local services…"):

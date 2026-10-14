@@ -1,6 +1,6 @@
 # Agentic Data Solution Workbench
 
-A local application that turns a CSV and a business problem into proposed computational approaches. You choose and approve a proposal; a local Ollama model generates code, Docker executes it with resource limits, and the workbench validates and preserves its outputs. Streamlit provides the interface, LangGraph persists the approval workflow, and each workspace has its own DuckDB database.
+A local application that turns a CSV and a business problem into proposed computational approaches. You choose and approve a proposal; a configured local model generates code, Docker executes it with resource limits, and the workbench validates and preserves its outputs. Use Ollama by default or Bionic/LM Studio's local OpenAI-compatible model API. Streamlit provides the interface, LangGraph persists the approval workflow, and each workspace has its own DuckDB database.
 
 The workflow is generic: SQL analysis, statistical methods, machine learning and graph analysis share the same builder, sandbox, validation and artifact registry. There are no banking-specific agent branches and no cloud-model fallback. A missing dependency or failed run is reported as a failure, with logs and generated files retained.
 
@@ -8,16 +8,20 @@ The workflow is generic: SQL analysis, statistical methods, machine learning and
 
 - Windows 11 with virtualization and WSL2 available for Linux containers.
 - Python 3.11 recommended; supported host versions are governed by the pinned dependency ranges in `requirements.txt`. The sandbox uses Python 3.11.
-- Ollama for Windows and a downloaded local model. `llama3.1:8b` is the configurable starting example.
+- Ollama for Windows and a downloaded local model, or Bionic/LM Studio with its local model server enabled. `llama3.1:8b` is the default Ollama example; another supported local model can be selected in `.env`.
 - Docker Desktop using its WSL2 engine and Linux containers, **or** Rancher Desktop using the **Moby/dockerd** container engine. A Docker CLI without a running compatible engine is insufficient.
 - A practical starting machine is 32 GB RAM with at least four CPU cores. The default sandbox has an 8 GB memory limit and four CPUs; the local LLM needs memory in addition to the sandbox. CPU-only generation can be slow.
 - Internet access is needed for initial Python packages, the Docker image build, and model downloads. Once those dependencies are present, workflow inference and execution are local.
 
 Install Python from [python.org](https://www.python.org/downloads/windows/), Ollama from [ollama.com](https://ollama.com/download/windows), and a container engine from [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/) or [Rancher Desktop](https://docs.rancherdesktop.io/getting-started/installation/). Follow [Microsoft's WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install) if `wsl --status` does not report a configured WSL2 installation. Installing or enabling virtualization may require administrator access and a restart.
 
+For an existing Bionic/LM Studio installation, use the [model configuration and debugging guide](docs/MODELS-AND-DEBUGGING.md). It explains how to select the exact served Gemma or other model ID, choose Docker Desktop or Rancher, and edit the application from the same checkout. Codex is not required to run or develop this project. A fresh laptop walkthrough is in [PERSONAL-LAPTOP-SETUP.md](docs/PERSONAL-LAPTOP-SETUP.md).
+
 ## Setup and startup
 
 Open PowerShell in this repository directory. The setup script creates a repository-local virtual environment, installs the requirements, preserves any existing `.env`, and generates the example CSVs. It builds the sandbox only when explicitly requested.
+
+The following quick start uses the default Ollama provider. If you already serve a model from LM Studio, follow the compatible-provider configuration in the guide above instead of pulling an Ollama model.
 
 ```powershell
 .\scripts\setup.ps1 -BuildSandbox
@@ -35,7 +39,9 @@ If Python 3.11 is not registered with the Windows `py` launcher, select an insta
 
 Development checks on this machine use a Python 3.12 host interpreter; the Docker sandbox remains Python 3.11. `doctor.py` exits with status 1 when the model, container engine or sandbox image is unavailable, and status 0 only when all required services are ready.
 
-Then open [http://localhost:8501](http://localhost:8501). Keep Ollama and the container engine running. You can install Python dependencies, generate sample data, upload CSVs and inspect profiles while the model downloads. Proposal generation needs the configured model; approved execution also needs Docker and the sandbox image.
+To verify actual structured generation through whichever provider you configured, run `.\.venv\Scripts\python.exe scripts\check_model.py --generate`. Without `--generate`, this command checks model availability only. A successful small response is distinct from the complete workflow smoke test below.
+
+Then open [http://localhost:8501](http://localhost:8501). Keep the selected local model server and container engine running. You can install Python dependencies, generate sample data, upload CSVs and inspect profiles while the model downloads. Proposal generation needs the configured model; approved execution also needs Docker and the sandbox image.
 
 On the current prepared machine, run `.\scripts\start.ps1` directly from this repository. It uses the repository's `.venv` when present, otherwise the already prepared `..\..\work\.venv` environment. You can also pass `-PythonExe "C:\path\to\python.exe"` to choose an environment with the requirements installed. For another machine, run setup first.
 
@@ -68,16 +74,20 @@ Approval is required before code generation/execution. Closing Streamlit does no
 
 ## Configuration
 
-Copy `.env.example` to `.env` and adjust values before starting Streamlit. Existing process environment variables take precedence. Restart Streamlit and any running workers after changing configuration.
+Copy `.env.example` to `.env` when first setting up and adjust values before starting Streamlit. Existing process environment variables take precedence. Finish or cancel active jobs before changing configuration, then restart Streamlit; already running workers retain their original settings.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `LLM_PROVIDER` | `ollama` | Local Ollama adapter |
+| `LLM_PROVIDER` | `ollama` | `ollama` or `openai_compatible`; explicit selection, no fallback |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama service |
 | `OLLAMA_MODEL` | `llama3.1:8b` | Downloaded model tag; change without editing code |
+| `LLM_BASE_URL` | `http://localhost:1234/v1` | Compatible local server base URL, including `/v1` |
+| `LLM_MODEL` | empty | Exact ID returned by that server's `/v1/models`; required for `openai_compatible` |
+| `LLM_API_KEY` | empty | Optional local server authentication token; keep it out of Git |
+| `LLM_STRUCTURED_MODE` | `json_schema` | `json_schema` or explicitly selected `json_object`; all responses are validated |
 | `LLM_TEMPERATURE` | `0.1` | Generation temperature |
 | `LLM_TIMEOUT_SECONDS` | `180` | Inference request timeout |
-| `LLM_CONTEXT_TOKENS` | `8192` | Requested model context |
+| `LLM_CONTEXT_TOKENS` | `8192` | Ollama requested context; compatible-provider client budget, with server load context configured separately |
 | `LLM_MAX_OUTPUT_TOKENS` | `4096` | Requested output budget |
 | `WORKSPACE_ROOT` | `./workspaces` | Persistent workspace location |
 | `MAX_UPLOAD_MB` | `100` | Backend CSV upload limit |
@@ -86,6 +96,8 @@ Copy `.env.example` to `.env` and adjust values before starting Streamlit. Exist
 | `SANDBOX_MEMORY` | `8g` | Memory limit per execution |
 | `SANDBOX_TIMEOUT_SECONDS` | `300` | Execution wall-clock limit |
 | `MAX_REPAIR_ATTEMPTS` | `2` | Repairs after the initial attempt, maximum two |
+
+Changing providers or models requires `.env` edits and a restart, not Python source changes or a sandbox image rebuild. For CPU-only inference, `LLM_TIMEOUT_SECONDS=600` is a starting suggestion, not a guarantee; an actual Llama repair request on this CPU exceeded it. When using LM Studio, load the model with at least the configured context budget; a model's advertised 128K capability does not mean the server is currently using 128K. See [configuration examples and the observed CPU limitation](docs/MODELS-AND-DEBUGGING.md#use-a-model-served-by-lm-studio).
 
 Streamlit also has a 100 MB upload limit in `.streamlit/config.toml`; change both limits if intentionally increasing it. UI file downloads are capped at 100 MB, JSON previews at 2 MB, code/text previews at 256 KB, and data previews at 100 rows. These limits protect the host UI from large generated output files. Complete artifacts remain in the workspace.
 
@@ -102,9 +114,9 @@ Use the four exact prompts and result checks in [examples/scenarios.md](examples
 The optional live-model smoke script uses six synthetic rows with a known total of 135. The first command creates and profiles a workspace, invokes the configured real model, and prints proposals. Review them before running the explicit approval command printed by the script:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\smoke_test.py --real-ollama
+.\.venv\Scripts\python.exe scripts\smoke_test.py --real-model
 # Replace these values with the workspace and proposal IDs printed above:
-.\.venv\Scripts\python.exe scripts\smoke_test.py --real-ollama --workspace "uc_..." --approve "proposal_..."
+.\.venv\Scripts\python.exe scripts\smoke_test.py --real-model --workspace "uc_..." --approve "proposal_..."
 ```
 
 The second command generates and executes code in Docker, validates actual outputs and preserves the workspace. It does not return success unless the workspace completes. This is an opt-in smoke test; live model behavior is never used as a deterministic unit-test dependency.
@@ -148,17 +160,19 @@ workbench/
   workspace.py               Workspace paths, metadata and event persistence
   data.py                    CSV ingestion and dataset profiling
   query.py                   Bounded read-only DuckDB queries
-  llm.py                     Structured local Ollama adapter
+  llm.py                     Structured local model adapters
   prompts.py                 Generic agent instructions
   workflow.py                Checkpointed LangGraph workflow and approval gate
   service.py                 UI-facing API and durable worker launch
   worker.py                  Background workflow process entry point
   sandbox.py                 Container lifecycle and execution isolation
   artifacts.py               Evidence validation and artifact registration
+  debug.py                   Review and sandbox rerun in a fresh debug workspace
 ui/helpers.py                Safe bounded artifact previews
 sandbox/                     Dockerfile, preinstalled libraries, trusted runner
 examples/                    Seeded generators and demonstration prompts
-scripts/                     Setup, startup, diagnostics and live smoke test
+scripts/                     Setup, startup, model checks, smoke test and debug CLI
+docs/                        Laptop setup, model selection and debugging
 tests/                       Foundation, contracts, UI and Docker checks
 workspaces/                  Runtime data, created on first use
 ```
@@ -170,6 +184,8 @@ Each workspace keeps the original CSV in `input/source.csv`; raw, staging, featu
 Generated programs run as an unprivileged user in a Linux container with a read-only root, no network, dropped capabilities, a process limit, resource limits, a timeout and temporary storage. Input and generated source are read-only mounts. Only the workspace's database, results, models and notebooks are writable. Metadata, logs, host environment variables and the Docker socket are not mounted. The host captures logs and controls container cleanup. If cleanup cannot be confirmed, the container identifier is retained and subsequent execution/database access fails closed until removal is confirmed. Serialized model loading runs in a separate child interpreter inside the inspection container so it cannot replace the trusted aggregate validation report.
 
 The image is built ahead of time with a fixed set of analysis libraries. Agents cannot install arbitrary dependencies at runtime; add a reviewed dependency to `sandbox/requirements.txt` and rebuild if a future use case requires it. Proposal feasibility should account for available libraries.
+
+The Docker image contains Python, its approved libraries and the trusted runner. The application source stays in this checkout, and generated solution files stay in each workspace. Editing `app.py` or `workbench/` generally requires restarting the app, not rebuilding Docker. Changes to `sandbox/Dockerfile`, `sandbox/requirements.txt` or `sandbox/runner.py` require an image rebuild. The [debugging guide](docs/MODELS-AND-DEBUGGING.md#edit-and-debug-the-code) maps source files and actual workspace logs.
 
 Success requires both successful execution and checks against real outputs. The builder may repair a failed implementation at most twice. All failed attempts remain inspectable. ML models are loaded only inside the sandbox. The Streamlit UI reads metadata and text, uses bounded read-only queries, and does not execute generated modules, notebook cells or serialized models. Registered Plotly JSON is rendered only when it contains no external resource URLs.
 
@@ -186,7 +202,9 @@ This MVP is a single-user local tool. Bind Streamlit to loopback as configured; 
 | Sandbox image is missing | Run `docker build -t agentic-workbench-sandbox:latest -f sandbox/Dockerfile .` with a running engine. Match the image tag to `SANDBOX_IMAGE`. |
 | Ollama is unavailable | Open Ollama or run `ollama serve`. Check the configured base URL. A port-in-use error usually means a server is already running. |
 | Model is missing | Run `ollama list` and then `ollama pull` with the exact configured tag. The application does not silently use a different model. |
-| Inference times out | CPU inference can exceed 180 seconds. Increase `LLM_TIMEOUT_SECONDS`, reduce input complexity, or use a capable model suited to your hardware. A larger context/model also needs more RAM. |
+| LM Studio model is missing or mismatched | Start its local server, query `/v1/models` and copy the exact returned ID into `LLM_MODEL`; use `LLM_PROVIDER=openai_compatible`. |
+| Compatible server rejects structured output | Prefer `LLM_STRUCTURED_MODE=json_schema`. Use `json_object` only when deliberately selecting a server-supported JSON mode; the workbench still validates the full response and does not silently switch modes. |
+| Inference times out | CPU inference can exceed even 600 seconds, as observed in a Llama repair request. Increasing `LLM_TIMEOUT_SECONDS` permits a longer wait but does not guarantee completion. Reduce input complexity or use a capable model suited to your hardware. A larger context/model also needs more RAM. |
 | Structured output fails repeatedly | Review the local model error and logs. Simplify the problem or use a stronger local model. The application must report this limitation rather than fabricate structured results. |
 | Memory exhaustion / container OOM | Inspect the execution metadata. Reduce dataset/model workload or intentionally change `SANDBOX_MEMORY`; keep enough RAM for Windows, the model and Docker together. |
 | Python package conflicts | Use the repository-local `.venv` and its explicit Python path. Avoid installing these requirements into a shared system interpreter. |
@@ -216,7 +234,7 @@ PowerShell environment variables use `$env:HTTPS_PROXY`, not `$https_proxy`. Oll
 
 4. After downloading, stop the temporary server with Ctrl+C if desired. The saved model remains on disk and Windows' persistent environment settings are unchanged.
 
-If your network requires a corporate VPN/proxy, connect to it or use a proxy hostname that resolves on that network. Clearing variables cannot create direct internet access where it is unavailable. An alternative GGUF model downloaded from a trusted model repository can be imported into Ollama with a reviewed Modelfile, but this workbench still communicates with Ollama rather than loading arbitrary Hugging Face model formats in its host process. See [Ollama import documentation](https://docs.ollama.com/import) and [Windows configuration](https://docs.ollama.com/windows).
+If your network requires a corporate VPN/proxy, connect to it or use a proxy hostname that resolves on that network. Clearing variables cannot create direct internet access where it is unavailable. An alternative GGUF model downloaded from a trusted model repository can be imported into Ollama with a reviewed Modelfile. When configured for Ollama, the workbench calls that local API; it does not load arbitrary Hugging Face model formats in its host process. Bionic/LM Studio users can instead use their existing local API as documented above. See [Ollama import documentation](https://docs.ollama.com/import) and [Windows configuration](https://docs.ollama.com/windows).
 
 ## Known limitations and next improvements
 

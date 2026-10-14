@@ -18,7 +18,9 @@ def main() -> int:
     report = {"python": platform.python_version(), "python_executable": sys.executable,
               "platform": platform.platform(), "docker_command": shutil.which("docker"),
               "ollama_command": shutil.which("ollama"), "workspace_root": str(settings.workspace_root.resolve()),
-              "configured_model": settings.ollama_model, "sandbox_image": settings.sandbox_image}
+              "configured_provider": settings.llm_provider,
+              "configured_model": settings.ollama_model if settings.llm_provider == "ollama" else settings.llm_model,
+              "sandbox_image": settings.sandbox_image}
     try:
         report["services"] = Service(settings).diagnostics()
     except Exception as exc:
@@ -26,11 +28,14 @@ def main() -> int:
     print(json.dumps(report, indent=2, default=str))
     print("\nIf Docker is unavailable, start Docker Desktop (WSL2, Linux containers) or Rancher Desktop (Moby/dockerd).")
     print("If the sandbox image is missing: docker build -t agentic-workbench-sandbox:latest -f sandbox/Dockerfile .")
-    print(f"If the model is missing: ollama pull {settings.ollama_model}")
+    if settings.llm_provider == "ollama":
+        print(f"If the model is missing: ollama pull {settings.ollama_model}")
+    else:
+        print("If the model is missing: enable the local model API in Bionic/LM Studio, load the model, and set LLM_MODEL to its exact /v1/models ID.")
     services = report.get("services", {})
-    ollama = services.get("ollama", {})
+    model = services.get("llm", services.get("ollama", {}))
     docker = services.get("docker", {})
-    ready = (ollama.get("available") and ollama.get("model_available") and
+    ready = (model.get("available") and model.get("model_available") and
              docker.get("available") and docker.get("image_available"))
     return 0 if ready and "diagnostic_error" not in report else 1
 

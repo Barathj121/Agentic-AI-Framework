@@ -7,3 +7,4 @@ workspaces/
 *.egg-info/
 .coverage
 test-results.xml
+test-results-*.xml

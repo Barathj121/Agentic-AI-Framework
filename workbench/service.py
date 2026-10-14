@@ -61,13 +61,17 @@ class Service:
                 safe_path(workspace, "metadata/cancel.requested").unlink(missing_ok=True)
             token = uuid.uuid4().hex
             request = {"action": action, "arguments": arguments, "token": token,
-                       "settings": {key:str(value) if isinstance(value, Path) else value for key,value in asdict(self.settings).items()}}
+                       "settings": {key:str(value) if isinstance(value, Path) else value for key,value in asdict(self.settings).items()
+                                    if key != "llm_api_key"}}
             request_path = safe_path(workspace, f"metadata/request_{token}.json")
             atomic_json(request_path, request)
             output_path = workspace / "logs/worker.log"
             flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             environment = os.environ.copy()
             environment.update(PYTHONUNBUFFERED="1", LANGSMITH_TRACING="false", LANGCHAIN_TRACING_V2="false")
+            # Credentials remain in the control-plane child environment, never
+            # workspace request files, events or the Docker execution contract.
+            environment["LLM_API_KEY"] = self.settings.llm_api_key
             # Hold dispatch lock until PID is registered; the worker waits on this lock first.
             with output_path.open("a", encoding="utf-8") as log:
                 child = subprocess.Popen([sys.executable, "-m", "workbench.worker", str(request_path)],
@@ -138,9 +142,16 @@ class Service:
 
     def diagnostics(self) -> dict:
         from concurrent.futures import ThreadPoolExecutor
-        from workbench.llm import OllamaClient
+        from workbench.llm import create_llm
         from workbench.sandbox import SandboxManager
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            model = pool.submit(OllamaClient(self.settings).health)
-            docker = pool.submit(SandboxManager(self.settings).health)
-            return {"python": sys.version.split()[0], "workspace_root":str(self.settings.workspace_root), "ollama":model.result(), "docker":docker.result()}
+        client = create_llm(self.settings)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                model = pool.submit(client.health)
+                docker = pool.submit(SandboxManager(self.settings).health)
+                health = model.result()
+                return {"python": sys.version.split()[0], "workspace_root":str(self.settings.workspace_root),
+                        "provider":self.settings.llm_provider, "model":client.model,
+                        "llm":health, "ollama":health, "docker":docker.result()}
+        finally:
+            client.close()

@@ -100,3 +100,74 @@ def test_retry_starts_from_original_and_preserves_prior_outputs(dataset):
     assert list((workspace / "metadata/prior_outputs").glob("*/results/old.csv"))
     assert "old_output" not in {table["name"] for table in database_schema(workspace)}
     assert sql_preview(workspace, "SELECT count(*) FROM raw.source")["rows"] == [[3]]
+
+
+@pytest.mark.parametrize("endpoint", ["http://localhost:1234/v1", "http://127.0.0.1:1234/v1", "http://[::1]:1234/v1",
+                                     "http://10.1.2.3:8080/v1", "https://192.168.1.10/v1", "http://172.20.0.2/v1", "http://[fd00::2]/v1"])
+def test_local_model_endpoint_validation_accepts_loopback_and_private_lan(tmp_path, endpoint):
+    settings = Settings(workspace_root=tmp_path, llm_provider="openai_compatible", llm_model="exact/model-id", llm_base_url=endpoint)
+    assert settings.llm_base_url == endpoint
+
+
+@pytest.mark.parametrize("endpoint", ["https://api.openai.com/v1", "https://8.8.8.8/v1", "http://169.254.169.254/v1",
+                                     "http://localhost.attacker.example/v1", "http://0.0.0.0/v1", "ftp://localhost/v1",
+                                     "http://secret:credential@localhost/v1", "http://localhost/v1?key=secret", "http://localhost/v1#fragment"])
+def test_model_endpoint_validation_rejects_cloud_and_embedded_credentials(tmp_path, endpoint):
+    with pytest.raises(ValueError):
+        Settings(workspace_root=tmp_path, llm_provider="openai_compatible", llm_model="fixture", llm_base_url=endpoint)
+
+
+def test_provider_configuration_is_explicit_and_preserves_default_ollama(tmp_path):
+    assert Settings(workspace_root=tmp_path).llm_provider == "ollama"
+    with pytest.raises(ValueError, match="LLM_MODEL"):
+        Settings(workspace_root=tmp_path, llm_provider="openai_compatible")
+    with pytest.raises(ValueError, match="LLM_PROVIDER"):
+        Settings(workspace_root=tmp_path, llm_provider="cloud")
+    with pytest.raises(ValueError, match="LLM_STRUCTURED_MODE"):
+        Settings(workspace_root=tmp_path, llm_structured_mode="automatic")
+    with pytest.raises(ValueError, match="Cloud models"):
+        Settings(workspace_root=tmp_path, llm_provider="openai_compatible", llm_model="remote:cloud")
+    with pytest.raises(ValueError, match="LLM_MAX_OUTPUT_TOKENS"):
+        Settings(workspace_root=tmp_path, llm_context_tokens=4096, llm_max_output_tokens=4096)
+
+
+def test_provider_environment_configuration_preserves_exact_model_id(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LLM_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("LLM_MODEL", "owner/gemma-exact:q4_0")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:1234/v1/")
+    monkeypatch.setenv("LLM_STRUCTURED_MODE", "json_object")
+    monkeypatch.setenv("LLM_API_KEY", "fixture-secret")
+    settings = Settings.from_env()
+    assert settings.llm_model == "owner/gemma-exact:q4_0"
+    assert settings.llm_base_url == "http://127.0.0.1:1234/v1"
+    assert settings.llm_structured_mode == "json_object"
+    assert settings.llm_api_key == "fixture-secret"
+    assert "fixture-secret" not in repr(settings)
+
+
+def test_background_dispatch_does_not_persist_model_credentials(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from workbench.service import Service
+
+    captured = {}
+
+    def spawn(*arguments, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(pid=123456789)
+
+    monkeypatch.setattr("workbench.service.subprocess.Popen", spawn)
+    secret = "fixture-server-token"
+    settings = Settings(workspace_root=tmp_path, llm_provider="openai_compatible", llm_model="exact-model", llm_api_key=secret)
+    service = Service(settings)
+    workspace = service.manager.create("Credential handling", "Inspect request persistence")
+    service._dispatch(workspace.name, "propose")
+    request_path = next((workspace / "metadata").glob("request_*.json"))
+    request_text = request_path.read_text(encoding="utf-8")
+    assert secret not in request_text
+    assert "llm_api_key" not in json.loads(request_text)["settings"]
+    assert captured["env"]["LLM_API_KEY"] == secret
+    assert secret not in (workspace / "logs/agent.jsonl").read_text(encoding="utf-8")
+    monkeypatch.setenv("LLM_API_KEY", captured["env"]["LLM_API_KEY"])
+    restored = Settings(**json.loads(request_text)["settings"])
+    assert restored.llm_api_key == secret

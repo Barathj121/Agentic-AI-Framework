@@ -23,7 +23,7 @@ from packaging.requirements import InvalidRequirement, Requirement
 
 from workbench.artifacts import validate_and_register
 from workbench.data import masked, sql_preview
-from workbench.llm import OllamaClient
+from workbench.llm import create_llm
 from workbench.prompts import BUILD_SYSTEM, PROPOSALS_SYSTEM, REPAIR_SYSTEM, UNDERSTANDING_SYSTEM
 from workbench.sandbox import AVAILABLE_DEPENDENCIES, SandboxManager
 from workbench.schemas import BuildResult, ExecutionResult, Proposal, ProposalSet, Understanding
@@ -104,7 +104,7 @@ class Workflow:
         os.environ["LANGCHAIN_TRACING_V2"] = "false"
         self.settings = settings
         self.manager = WorkspaceManager(settings.workspace_root)
-        self.llm = llm if llm is not None else OllamaClient(settings)
+        self.llm = llm if llm is not None else create_llm(settings)
         self.sandbox = sandbox if sandbox is not None else SandboxManager(settings)
 
     def _workspace(self, workspace: Path) -> Path:
@@ -260,7 +260,8 @@ class Workflow:
 
     def cancel(self, workspace: Path) -> None:
         workspace = self._workspace(workspace)
-        if self.manager.read(workspace, "metadata/state.json", {}).get("status") == "COMPLETED":
+        if (self.manager.read(workspace, "metadata/workspace.json", {}).get("status") == "COMPLETED"
+                or self.manager.read(workspace, "metadata/state.json", {}).get("status") == "COMPLETED"):
             return
         # This flag must never wait for the workflow lock: a running node owns it.
         safe_path(workspace, "metadata/cancel.requested").touch()

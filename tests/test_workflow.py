@@ -294,13 +294,27 @@ def test_exploration_masks_strings_even_if_identifiers_are_aliased(prepared):
 def test_syntax_error_repaired_before_any_execution(prepared):
     settings, manager, workspace = prepared
     sandbox = FixtureSandbox()
-    llm = FixtureLLM([*planning_responses(), build(code="def incomplete(\n"), build()])
+    # Realistic model failure: a JSON string can decode successfully while its
+    # embedded Python SQL literal is still syntactically invalid.
+    invalid_source = (
+        "import duckdb\n"
+        "with duckdb.connect('database/workspace.duckdb') as con:\n"
+        "    con.execute('SELECT SUM(amount)\nFROM raw.source')\n"
+    )
+    llm = FixtureLLM([*planning_responses(), build(code=invalid_source), build()])
     workflow = Workflow(settings, llm=llm, sandbox=sandbox)
     workflow.propose(workspace)
     result = workflow.approve(workspace, "aggregate")
     assert result["status"] == "COMPLETED", result.get("error")
     assert sandbox.calls == [1]
-    assert "SyntaxError" in llm.calls[-1][2]
+    repair_context = json.loads(llm.calls[-1][2])
+    assert "unterminated string literal" in repair_context["generation_error"]
+    assert repair_context["current_files"][0]["content"] == invalid_source
+    assert repair_context["execution"] == {}
+    assert repair_context["approved_plan"]["proposal"]["expected_outputs"] == [
+        output.model_dump(mode="json") for output in proposal().expected_outputs
+    ]
+    assert not (workspace / "metadata/attempts/0/execution.json").exists()
     assert manager.read(workspace, "metadata/attempts/0/generation_error.json")["error"].startswith("SyntaxError")
 
 
@@ -331,3 +345,16 @@ def test_missing_docker_fails_without_wasting_code_repair_calls(prepared):
     assert "Docker engine" in result["error"]
     assert sandbox.calls == [0]
     assert len(workflow.llm.calls) == 3
+
+
+def test_cancel_preserves_completed_manual_workspace_without_graph_state(prepared):
+    settings, manager, workspace = prepared
+    manager.status(workspace, "COMPLETED")
+    before = {name: (workspace / "metadata" / name).read_bytes() for name in ("workspace.json", "manifest.json")}
+    assert not (workspace / "metadata/state.json").exists()
+    runtime = FixtureSandbox()
+    Workflow(settings, llm=FixtureLLM([]), sandbox=runtime).cancel(workspace)
+    assert not runtime.cancelled
+    assert not (workspace / "metadata/cancel.requested").exists()
+    assert not (workspace / "metadata/state.json").exists()
+    assert before == {name: (workspace / "metadata" / name).read_bytes() for name in before}
