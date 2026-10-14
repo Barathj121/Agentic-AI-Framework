@@ -1,0 +1,321 @@
+{
+  "verified_at": "2026-10-15T01:21:14.001326+05:30",
+  "workspace_id": "uc_20261014_194744_0c621e8403",
+  "status": "COMPLETED",
+  "provenance": {
+    "mode": "CODEX-ASSISTED PREDICTIVE EXPERIMENT",
+    "analysis_author": "Codex assistant, reviewed source",
+    "local_llm_used": false,
+    "synthetic_data": true,
+    "actual_model_training": true,
+    "execution": "Real isolated Docker sandbox",
+    "synthetic_target": "confirmed_escalation",
+    "target_meaning": "Simulated analyst escalation after investigation; never proof of crime"
+  },
+  "source_sha256": "0453077de40e22f506aae3af8daae6e453fe69dcbf94aa3ac05c9df683fdf8a2",
+  "dataset_sha256": "5059b3f8d7301d4776171671cd8cb4e2c4631601ee574bd7c59fedc26edc16f5",
+  "execution": {
+    "success": true,
+    "exit_code": 0,
+    "execution_time_seconds": 7.109000000000378,
+    "timed_out": false,
+    "cancelled": false,
+    "oom_killed": false
+  },
+  "validation": {
+    "passed": true,
+    "checks_passed": 45,
+    "checks_total": 45,
+    "registered_artifacts": 23
+  },
+  "independent_verification": {
+    "passed": true,
+    "scope": "Independent SQL checks executed in Docker against persisted predictions; AP and Brier are recomputed without sklearn.",
+    "checks_passed": 13,
+    "checks_total": 13,
+    "checks": [
+      {
+        "name": "Input has 8000 independent alerts",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT count(*)=8000 AND count(DISTINCT alert_id)=8000 AND count(DISTINCT customer_id)=8000 FROM raw.source"
+        }
+      },
+      {
+        "name": "Held-out prediction coverage",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT count(*)=1000 AND count(DISTINCT alert_id)=1000 FROM results.test_predictions"
+        }
+      },
+      {
+        "name": "Prediction IDs belong only to held-out dates",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT NOT EXISTS (SELECT 1 FROM results.test_predictions p LEFT JOIN raw.source r USING(alert_id) WHERE r.alert_id IS NULL OR CAST(r.alert_time AS TIMESTAMP)<TIMESTAMP '2025-12-17' OR CAST(r.alert_time AS TIMESTAMP)>=TIMESTAMP '2026-02-05')"
+        }
+      },
+      {
+        "name": "Five new examples scored",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT count(*)=5 FROM results.example_predictions"
+        }
+      },
+      {
+        "name": "Ten feature importances saved",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT count(*)=10 FROM results.feature_importance"
+        }
+      },
+      {
+        "name": "Scores and frozen decisions are consistent",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT count(*)=1000 AND bool_and(isfinite(escalation_score) AND escalation_score BETWEEN 0 AND 1 AND isfinite(frozen_threshold) AND frozen_threshold BETWEEN 0 AND 1 AND review_recommended=(escalation_score>=frozen_threshold) AND split='test') AND count(DISTINCT frozen_threshold)=1 AND count(DISTINCT model_id)=1 FROM results.test_predictions"
+        }
+      },
+      {
+        "name": "Held-out truth reconciles to input",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT count(*)=1000 AND bool_and(p.confirmed_escalation=r.confirmed_escalation AND p.customer_id=r.customer_id AND p.alert_time=CAST(r.alert_time AS TIMESTAMPTZ) AND p.label_available_at=CAST(r.label_available_at AS TIMESTAMPTZ)) FROM results.test_predictions p JOIN raw.source r USING(alert_id)"
+        }
+      },
+      {
+        "name": "Selected model and threshold match scored predictions",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT count(*)=1 AND bool_and(m.model=p.model_id AND m.frozen_validation_threshold=p.frozen_threshold) FROM results.model_comparison m CROSS JOIN (SELECT DISTINCT model_id,frozen_threshold FROM results.test_predictions) p WHERE selected_by_validation"
+        }
+      },
+      {
+        "name": "Selection uses best candidate validation score",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT count(*)=1 AND bool_and(validation_average_precision=(SELECT max(validation_average_precision) FROM results.model_comparison WHERE model IN ('Prevalence dummy','Logistic regression','Random forest'))) FROM results.model_comparison WHERE selected_by_validation"
+        }
+      },
+      {
+        "name": "Temporal split and label maturity",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT (SELECT rows=4600 FROM results.split_audit WHERE split='train') AND (SELECT rows=1200 FROM results.split_audit WHERE split='validation') AND (SELECT rows=1000 FROM results.split_audit WHERE split='test') AND (SELECT CAST(latest_label_available AS TIMESTAMPTZ) FROM results.split_audit WHERE split='train') < (SELECT CAST(first_alert AS TIMESTAMPTZ) FROM results.split_audit WHERE split='validation') AND (SELECT CAST(latest_label_available AS TIMESTAMPTZ) FROM results.split_audit WHERE split='validation') < (SELECT CAST(first_alert AS TIMESTAMPTZ) FROM results.split_audit WHERE split='test') AND (SELECT max(label_available_at) FROM results.test_predictions)<TIMESTAMPTZ '2026-03-07 00:00:00+00'"
+        }
+      },
+      {
+        "name": "Average precision independently recomputed from scored rows",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "WITH score_groups AS (SELECT escalation_score,count(*) AS n,sum(confirmed_escalation) AS pos FROM results.test_predictions GROUP BY escalation_score), cumulative AS (SELECT pos,sum(pos) OVER(ORDER BY escalation_score DESC ROWS UNBOUNDED PRECEDING) AS tp,sum(n) OVER(ORDER BY escalation_score DESC ROWS UNBOUNDED PRECEDING) AS reviewed,sum(pos) OVER() AS positives FROM score_groups), recomputed AS (SELECT sum((pos::DOUBLE/positives)*(tp::DOUBLE/reviewed)) AS ap FROM cumulative) SELECT abs(recomputed.ap-m.test_average_precision)<1e-12 FROM recomputed CROSS JOIN results.model_comparison m WHERE m.selected_by_validation"
+        }
+      },
+      {
+        "name": "Brier score independently recomputed from scored rows",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT abs((SELECT avg(power(escalation_score-confirmed_escalation,2)) FROM results.test_predictions)-test_brier_score)<1e-12 FROM results.model_comparison WHERE selected_by_validation"
+        }
+      },
+      {
+        "name": "Confusion matrix reconciles to saved predictions",
+        "kind": "sql_assertion",
+        "target": "results.test_predictions",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT count(*)=1000 AND count(*) FILTER(WHERE review_recommended AND confirmed_escalation=1)=64 AND count(*) FILTER(WHERE review_recommended AND confirmed_escalation=0)=54 AND count(*) FILTER(WHERE NOT review_recommended AND confirmed_escalation=1)=106 AND count(*) FILTER(WHERE NOT review_recommended AND confirmed_escalation=0)=776 FROM results.test_predictions"
+        }
+      }
+    ]
+  },
+  "split_audit": [
+    {
+      "split": "train",
+      "rows": 4600,
+      "start_day_inclusive": 0,
+      "end_day_exclusive": 230,
+      "labels_known_by_day": 260,
+      "first_alert": "2025-01-01 08:00:00+00:00",
+      "last_alert": "2025-08-18 19:05:00+00:00",
+      "latest_label_available": "2025-09-17 19:05:00+00:00",
+      "positive_labels": 798,
+      "positive_fraction": 0.17347826086956522,
+      "immature_rows_excluded": 0
+    },
+    {
+      "split": "validation",
+      "rows": 1200,
+      "start_day_inclusive": 260,
+      "end_day_exclusive": 320,
+      "labels_known_by_day": 350,
+      "first_alert": "2025-09-18 08:00:00+00:00",
+      "last_alert": "2025-11-16 19:05:00+00:00",
+      "latest_label_available": "2025-12-16 19:05:00+00:00",
+      "positive_labels": 201,
+      "positive_fraction": 0.1675,
+      "immature_rows_excluded": 0
+    },
+    {
+      "split": "test",
+      "rows": 1000,
+      "start_day_inclusive": 350,
+      "end_day_exclusive": 400,
+      "labels_known_by_day": 430,
+      "first_alert": "2025-12-17 08:00:00+00:00",
+      "last_alert": "2026-02-04 19:05:00+00:00",
+      "latest_label_available": "2026-03-06 19:05:00+00:00",
+      "positive_labels": 170,
+      "positive_fraction": 0.17,
+      "immature_rows_excluded": 0
+    }
+  ],
+  "excluded_gap_rows": 1200,
+  "feature_count": 10,
+  "features": [
+    "amount_log",
+    "amount_to_median",
+    "transfers_24h",
+    "unique_recipients_7d",
+    "cross_border_ratio_30d",
+    "new_recipient_ratio_7d",
+    "night_transfer_ratio_7d",
+    "account_age_days",
+    "prior_alerts_180d",
+    "inflow_outflow_ratio_7d"
+  ],
+  "selection": {
+    "model": "Logistic regression",
+    "criterion": "Validation average precision only",
+    "validation_average_precision_by_candidate": {
+      "Prevalence dummy": 0.1675,
+      "Logistic regression": 0.44042214820634445,
+      "Random forest": 0.4250703802026224
+    },
+    "refit_on_validation": false,
+    "test_used_for_selection": false
+  },
+  "threshold": {
+    "value": 0.3718670894296876,
+    "source": "Validation scores only, 90th percentile",
+    "target_review_fraction": 0.1,
+    "actual_validation_review_fraction": 0.1,
+    "frozen_before_test_evaluation": true
+  },
+  "heldout_test": {
+    "rows": 1000,
+    "positive_labels": 170,
+    "prevalence": 0.17,
+    "average_precision": 0.4444459729726538,
+    "roc_auc": 0.7270659107016302,
+    "precision": 0.5423728813559322,
+    "recall": 0.3764705882352941,
+    "f1": 0.4444444444444444,
+    "brier_score": 0.1195551456430519,
+    "review_count": 118,
+    "review_fraction": 0.118,
+    "lift_over_prevalence": 3.1904287138584246,
+    "true_positive": 64,
+    "false_positive": 54,
+    "false_negative": 106,
+    "true_negative": 776
+  },
+  "fixed_10pct_test_capacity": {
+    "selected_model": {
+      "review_count": 100,
+      "true_positive": 57,
+      "precision": 0.57,
+      "recall": 0.3352941176470588,
+      "lift": 3.352941176470588
+    },
+    "fixed_heuristic": {
+      "review_count": 100,
+      "true_positive": 45,
+      "precision": 0.45,
+      "recall": 0.2647058823529412,
+      "lift": 2.6470588235294117
+    },
+    "interpretation": "Same count of highest-ranked test alerts; separate from the frozen-threshold deployment evaluation"
+  },
+  "saved_model_reload": {
+    "identical_test_predictions": true,
+    "comparison": "numpy.assert_array_equal on all 1000 test scores",
+    "fresh_cases_scored": 5,
+    "fresh_case_labels_known": false
+  },
+  "saved_model": {
+    "location": "models/alert_prioritizer.joblib",
+    "bytes": 3171,
+    "sha256": "0b4731c3834db347be9d033f23730deb40c9529c18d17e068f7a245c93a3c9fd"
+  },
+  "limitations": [
+    "Labels are simulated analyst-escalation outcomes from a synthetic data generator; they are not evidence of crime, laundering or regulatory violations.",
+    "The experiment evaluates synthetic temporal generalization only. It has not been validated against real FCCM alerts or investigated outcomes.",
+    "Scores estimate the simulated target and have not been calibrated. Brier score is a diagnostic, not a calibration guarantee.",
+    "Features must be computed using information available at each alert time. This synthetic dataset supplies those features directly; production aggregation requires separate point-in-time controls.",
+    "The frozen threshold targets 10% review on validation. Future and test review rates can differ because score distributions drift or ties occur.",
+    "The fixed-capacity comparison ranks exactly 10% of test alerts, separately from deployment at the frozen threshold. Test curves are descriptive and did not select the model or threshold.",
+    "One unique synthetic customer per row avoids customer overlap. Real repeated-customer data needs customer-aware temporal evaluation.",
+    "Feature permutation is global post-hoc association on the test set, not a causal explanation or an explanation of a particular alert.",
+    "The five fresh cases have unknown outcomes. Their predicted scores demonstrate saved-model inference, not correct predictions.",
+    "Hyperparameters were specified before evaluation. The winning candidate was selected only by validation average precision; test outcomes were used for final reporting and interpretation."
+  ],
+  "ui_verification": {
+    "browser_visual_inspection": "confirmed",
+    "scope": "The running predictive dashboard, four metrics and four Plotly charts were visually inspected; explicit light chart text is readable. The SQL interface displayed all five fresh-case scores and their review decisions. The dashboard was left open.",
+    "fresh_case_display": {
+      "rounded_scores": [
+        0.038,
+        0.997,
+        0.827,
+        0.958,
+        0.247
+      ],
+      "review_recommended": [
+        false,
+        true,
+        true,
+        true,
+        false
+      ]
+    },
+    "screenshots": "predictive-dashboard.jpg and prediction-examples.jpg retained in local deliverables outside the repository."
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "verified_at": "2026-10-15T01:12:25.581064+05:30",
+  "workspace_id": "uc_20261014_193302_51c3cb2ca0",
+  "mode": "CODEX-ASSISTED SHOWCASE",
+  "status": "COMPLETED",
+  "provenance": {
+    "analysis_author": "Codex assistant, explicitly reviewed showcase",
+    "local_llm_used": false,
+    "execution": "Real isolated Docker sandbox",
+    "synthetic_data": true,
+    "annotation_file_used": false
+  },
+  "source_sha256": "d0ae2095e04804e6b770b6c268e56fc988c4551206b013296c273643b7423245",
+  "execution": {
+    "success": true,
+    "exit_code": 0,
+    "execution_time_seconds": 4.515999999999622,
+    "timed_out": false,
+    "cancelled": false,
+    "oom_killed": false
+  },
+  "validation": {
+    "passed": true,
+    "checks_passed": 42,
+    "checks_total": 42,
+    "registered_artifacts": 24
+  },
+  "independent_verification": {
+    "passed": true,
+    "checks_passed": 4,
+    "checks_total": 4,
+    "checks": [
+      {
+        "name": "Burst reconciles to raw transfer rows",
+        "kind": "sql_assertion",
+        "target": "results.customer_review",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT (SELECT max(hourly_transfers) FROM results.hourly_activity WHERE customer_id='C0506')=100 AND (SELECT count(*) FROM raw.source WHERE customer_id='C0506' AND transaction_type='transfer')=100"
+        }
+      },
+      {
+        "name": "Hub accounts and amount reconcile",
+        "kind": "sql_assertion",
+        "target": "results.customer_review",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT (SELECT source_accounts=25 AND transfers=100 AND abs(total_amount-9110.80)<0.001 FROM results.recipient_summary WHERE destination_account='A0999') AND (SELECT count(DISTINCT account_id)=25 AND count(*)=100 AND abs(sum(transaction_amount)-9110.80)<0.001 FROM raw.source WHERE destination_account='A0999' AND transaction_type='transfer')"
+        }
+      },
+      {
+        "name": "Repeated payments have exact evidence",
+        "kind": "sql_assertion",
+        "target": "results.customer_review",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT count(DISTINCT customer_id)=5 AND count(*)=100 AND min(repeated_transfer_count)=20 AND max(repeated_transfer_count)=20 FROM results.transaction_evidence WHERE repeated_modest_signal"
+        }
+      },
+      {
+        "name": "Review and evidence totals agree",
+        "kind": "sql_assertion",
+        "target": "results.customer_review",
+        "passed": true,
+        "evidence": {
+          "result": true,
+          "sql": "SELECT (SELECT count(*)=532 AND count(*) FILTER(WHERE signal_count>0)=106 FROM results.customer_review) AND (SELECT count(*)=483 AND count(DISTINCT transaction_id)=483 FROM results.transaction_evidence)"
+        }
+      }
+    ]
+  },
+  "metrics": {
+    "transactions": 10000,
+    "customers": 532,
+    "transfers": 2752,
+    "customers_for_review": 106,
+    "evidence_transactions": 483,
+    "recipient_accounts": 677,
+    "analysis_period_start": "2025-01-01 00:00:00+00:00",
+    "analysis_period_end": "2025-03-31 23:58:16+00:00"
+  },
+  "findings": [
+    {
+      "title": "A concentrated burst",
+      "detail": "C0506 made 100 transfers in the clock hour starting 2025-03-02 00:00:00+00:00.",
+      "query": "SELECT * FROM results.hourly_activity ORDER BY hourly_transfers DESC LIMIT 1"
+    },
+    {
+      "title": "Many sources, one recipient",
+      "detail": "A0999 received 100 transfers from 25 distinct source accounts, totaling 9,110.80 synthetic amount units.",
+      "query": "SELECT * FROM results.recipient_summary ORDER BY source_accounts DESC, transfers DESC LIMIT 1"
+    },
+    {
+      "title": "Repeated modest payments",
+      "detail": "5 customers had at least 5 similar modest transfers to the same recipient in a clock hour; 5 groups met the count and variation rules.",
+      "query": "SELECT customer_id, max(repeated_transfer_count) AS repeat_count FROM results.transaction_evidence WHERE repeated_modest_signal GROUP BY customer_id ORDER BY repeat_count DESC"
+    },
+    {
+      "title": "A shift in spending",
+      "detail": "C0507 has a late-half median of 2,286.27 versus early-half 29.30 (78.0\u00d7).",
+      "query": "SELECT customer_id, early_median, late_median, behavior_ratio FROM results.customer_review ORDER BY behavior_ratio DESC LIMIT 1"
+    }
+  ],
+  "threshold_sensitivity": [
+    {
+      "threshold_multiplier": 0.8,
+      "customers_for_review": 241,
+      "transactions_in_evidence": 687
+    },
+    {
+      "threshold_multiplier": 1,
+      "customers_for_review": 106,
+      "transactions_in_evidence": 483
+    },
+    {
+      "threshold_multiplier": 1.2,
+      "customers_for_review": 93,
+      "transactions_in_evidence": 467
+    }
+  ],
+  "limitations": [
+    "Review scores are transparent rule counts, not probabilities, fraud labels or financial advice.",
+    "All data is synthetic; no accuracy or real-world crime detection claim is made.",
+    "Amounts are assumed to share a synthetic unit; no currency conversion is available.",
+    "Clock-hour boundaries can split bursts; shared recipients can have legitimate explanations.",
+    "Customer medians and chronological halves use the same observation period; this is retrospective description, not prospective prediction.",
+    "Thresholds are illustrative; sensitivity varies burst, amount and hub thresholds only. Repeated-payment and behavior rules are unchanged.",
+    "The generated solution notebook records module execution; notebook cells themselves were not run."
+  ],
+  "ui_verification": "Rendered in the running Streamlit application and visually inspected in a browser; four metrics, four findings and four Plotly charts. Streamlit AppTest also passed."
+}

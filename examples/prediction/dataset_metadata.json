@@ -1,0 +1,108 @@
+{
+  "dataset": "synthetic_alerts.csv",
+  "synthetic": true,
+  "authorship": "Codex-assisted demonstration; no local LLM inference generated this dataset or solution.",
+  "rows": 8000,
+  "days": 400,
+  "alerts_per_day": 20,
+  "seed_features": 20261015,
+  "seed_outcome_noise": 20261016,
+  "seed_labels": 20261017,
+  "time_zone": "UTC",
+  "label_maturity_days": 30,
+  "outcome": "Stochastically simulated analyst decision to escalate an alert within a 30-day label window; not verified fraud.",
+  "feature_columns": [
+    "amount_log",
+    "amount_to_median",
+    "transfers_24h",
+    "unique_recipients_7d",
+    "cross_border_ratio_30d",
+    "new_recipient_ratio_7d",
+    "night_transfer_ratio_7d",
+    "account_age_days",
+    "prior_alerts_180d",
+    "inflow_outflow_ratio_7d"
+  ],
+  "target_column": "confirmed_escalation",
+  "excluded_from_features": [
+    "alert_id",
+    "customer_id",
+    "alert_time",
+    "label_available_at",
+    "day_offset",
+    "confirmed_escalation"
+  ],
+  "positive_rows": 1384,
+  "positive_rate": 0.173,
+  "observation_as_of": "2026-03-06T19:05:00+00:00",
+  "splits": {
+    "train": {
+      "day_offset_inclusive": 0,
+      "day_offset_exclusive": 230,
+      "first_alert_date": "2025-01-01",
+      "last_alert_date": "2025-08-18",
+      "rows": 4600
+    },
+    "maturity_gap_1": {
+      "day_offset_inclusive": 230,
+      "day_offset_exclusive": 260,
+      "first_alert_date": "2025-08-19",
+      "last_alert_date": "2025-09-17",
+      "rows": 600
+    },
+    "validation": {
+      "day_offset_inclusive": 260,
+      "day_offset_exclusive": 320,
+      "first_alert_date": "2025-09-18",
+      "last_alert_date": "2025-11-16",
+      "rows": 1200
+    },
+    "maturity_gap_2": {
+      "day_offset_inclusive": 320,
+      "day_offset_exclusive": 350,
+      "first_alert_date": "2025-11-17",
+      "last_alert_date": "2025-12-16",
+      "rows": 600
+    },
+    "test": {
+      "day_offset_inclusive": 350,
+      "day_offset_exclusive": 400,
+      "first_alert_date": "2025-12-17",
+      "last_alert_date": "2026-02-04",
+      "rows": 1000
+    }
+  },
+  "generator": {
+    "features": "Independent standard-normal latent activity and latent risk create correlated synthetic past-behavior snapshots. All equations, rounding and bounds are in generate_data.py. Each customer appears exactly once.",
+    "label_formula": "logit = -2.35 + 0.70*log(amount_to_median) + 0.45*log1p(transfers_24h/5) + 0.35*log1p(unique_recipients_7d/6) + 1.40*(new_recipient_ratio_7d-0.2) + 0.70*(cross_border_ratio_30d-0.12) + 1.20*(night_transfer_ratio_7d-0.15) - 0.25*log1p(account_age_days/365) + 0.30*prior_alerts_180d + 0.80*I(amount_to_median>2 and new_recipient_ratio_7d>0.35) + 0.40*max(log(inflow_outflow_ratio_7d),0) + Normal(0,0.75); y ~ Bernoulli(sigmoid(logit))",
+    "hidden_fields_not_exported": [
+      "latent_activity",
+      "latent_risk",
+      "unobserved_outcome_noise",
+      "label_probability"
+    ],
+    "stochastic_labels": "Outcome noise and Bernoulli sampling use distinct RNG streams; features do not deterministically identify labels."
+  },
+  "feature_definitions": {
+    "amount_log": "Natural log(1 + alert transaction amount in synthetic currency units).",
+    "amount_to_median": "Alert amount divided by the customer's historical median amount.",
+    "transfers_24h": "Count of prior transfers over 24 hours.",
+    "unique_recipients_7d": "Count of unique prior recipients over 7 days.",
+    "cross_border_ratio_30d": "Share of prior transfers that were cross-border over 30 days.",
+    "new_recipient_ratio_7d": "Share of prior transfers to newly observed recipients over 7 days.",
+    "night_transfer_ratio_7d": "Share of prior transfers during night hours over 7 days.",
+    "account_age_days": "Account age at the alert time.",
+    "prior_alerts_180d": "Count of alerts known before the current alert over 180 days; not future outcomes.",
+    "inflow_outflow_ratio_7d": "Prior incoming amount divided by prior outgoing amount over 7 days."
+  },
+  "limitations": [
+    "No real customers, transactions, analyst decisions or production validation are represented.",
+    "Features are synthetic snapshots; their lookback semantics are stipulated rather than reconstructed from an event ledger.",
+    "Days are stationary draws. Chronological evaluation demonstrates time discipline but does not demonstrate robustness to real-world drift.",
+    "All customers are unique; repeated-customer dependence and real operational feedback are absent.",
+    "The known outcome formula makes this an educational benchmark; its metrics cannot establish deployment suitability or fraud detection quality.",
+    "Thirty-day maturity is assumed fixed. Production label delay, censoring, privacy, fairness and analyst selection bias require separate review.",
+    "Maturity-gap rows are excluded from all model fitting, selection, threshold tuning and final test evaluation."
+  ],
+  "csv_sha256": "5059b3f8d7301d4776171671cd8cb4e2c4631601ee574bd7c59fedc26edc16f5"
+}

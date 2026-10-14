@@ -1,19 +1,21 @@
 {
-  "verified_at": "2026-10-14T19:26:07.469601+00:00",
+  "verified_at": "2026-10-15T01:21:14.001326+05:30",
   "host_python": "3.12.14",
   "sandbox_python": "3.11",
-  "tests_passed": 148,
+  "tests_passed": 170,
   "tests_skipped": 0,
   "live_ollama_verified": true,
   "live_workflow_verified": false,
   "test_batches": {
     "test-results.xml": {
-      "passed": 133,
-      "skipped": 0
+      "passed": 155,
+      "skipped": 0,
+      "scope": "Current full non-Docker suite; 15 Docker tests deselected."
     },
     "test-results-docker.xml": {
       "passed": 15,
-      "skipped": 0
+      "skipped": 0,
+      "scope": "Prior real Docker integration run on the unchanged sandbox implementation; not rerun for dashboard/showcase additions."
     }
   },
   "junit_report_scope": "Local JUnit reports cover the full non-Docker suite and all opted-in Docker integration tests. Reports are excluded from Git and the source ZIP.",
@@ -21,7 +23,7 @@
   "sandbox_python_version": "3.11.17",
   "memory_limit_note": "Cgroup RAM, zero swappiness and per-process hard RLIMIT_AS tested. Kernel lacks aggregate swap accounting.",
   "live_ollama_note": "See live-workflow-verification.json for actual live attempts and separately labelled manual recovery.",
-  "ui_verification": "Streamlit AppTest and HTTP health 200. Screenshot inspection unavailable because no browser surface was available.",
+  "ui_verification": "Streamlit AppTest, HTTP health 200 and visual browser inspection of the running completed showcase dashboard: four metrics, four findings, four Plotly charts and customer review table.",
   "demos": [
     {
       "name": "FIXTURE DEMO \u00b7 SALES",
@@ -160,5 +162,12 @@
   },
   "live_compatible_api_verified": true,
   "bionic_gemma_verified": false,
-  "live_workflow_verification_report": "live-workflow-verification.json"
+  "live_workflow_verification_report": "live-workflow-verification.json",
+  "showcase_verification_report": "showcase-verification.json",
+  "codex_assisted_showcase_verified": true,
+  "showcase_note": "Reviewed assistant-authored synthetic analysis executed in real Docker: 42 output checks and 4 independent SQL checks passed, with 24 registered artifacts. This is separate from local-model reasoning verification.",
+  "prediction_verification_report": "prediction-verification.json",
+  "codex_assisted_predictive_model_verified": true,
+  "prediction_note": "Assistant-authored supervised experiment trained actual estimators in Docker; model selection and frozen threshold use validation only. Chronological 1000-row held-out evaluation, reload score parity, and 13 independent SQL checks passed. Synthetic escalation target only; no autonomous local-LLM or real-world financial-crime quality claim.",
+  "prediction_ui_verification": "Visual browser inspection confirmed the completed predictive dashboard, four metrics and four readable Plotly charts. SQL UI verified five saved-model predictions with unknown outcomes and their threshold decisions."
 }

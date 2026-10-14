@@ -351,7 +351,7 @@ def artifact_panel(workspace: Path, artifact: dict, key: str) -> None:
                 if chart_has_external_resources(spec):
                     st.warning("Chart preview contains external resource references. Download the specification for inspection.")
                 else:
-                    st.plotly_chart(pio.from_json(json.dumps(spec)), width="stretch", key=f"chart_{key}")
+                    st.plotly_chart(pio.from_json(json.dumps(spec)), theme=None, width="stretch", key=f"chart_{key}")
             elif kind == "json" or path.suffix.lower() == ".json":
                 st.json(read_json_preview(workspace, location), expanded=False)
             elif kind == "csv" or path.suffix.lower() == ".csv":
@@ -371,10 +371,16 @@ def artifact_panel(workspace: Path, artifact: dict, key: str) -> None:
 
 
 def results_page(service: Service, workspace: Path) -> None:
+    from ui.dashboard import ordered_artifacts, render_dashboard
+
     st.header("Results & evidence")
     manifest = service.manager.read(workspace, "metadata/manifest.json", {}) or {}
     validation = service.manager.read(workspace, "metadata/validation.json", {}) or {}
     artifacts = manifest.get("artifacts", [])
+    render_dashboard(workspace, artifacts, validation)
+    selected = service.manager.read(workspace, "metadata/selected_plan.json", {}) or {}
+    selected = selected.get("proposal", selected)
+    artifacts = ordered_artifacts(artifacts, selected.get("expected_outputs", []))
     st.caption("Artifacts below are registered from execution outputs. Proposal descriptions are model-generated; validation and saved data provide the execution evidence.")
     if not artifacts:
         st.info("No artifacts have been registered yet. Approve a proposal and follow its execution in the monitor.")
@@ -384,8 +390,6 @@ def results_page(service: Service, workspace: Path) -> None:
                 artifact_panel(workspace, artifact, f"{workspace.name}_{index}")
     with st.expander("Validation evidence", expanded=bool(validation) and not validation.get("passed", False)):
         display_validation(validation)
-    selected = service.manager.read(workspace, "metadata/selected_plan.json", {}) or {}
-    selected = selected.get("proposal", selected)
     if selected:
         with st.expander("Approved approach, assumptions & limitations"):
             proposal_panel(selected)

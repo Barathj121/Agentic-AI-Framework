@@ -103,6 +103,22 @@ Streamlit also has a 100 MB upload limit in `.streamlit/config.toml`; change bot
 
 ## Synthetic examples and end-to-end demonstrations
 
+For **actual supervised prediction**, use the [predictive alert-prioritization experiment](examples/prediction/README.md). It trains prevalence, logistic-regression and random-forest candidates on 8,000 synthetic alerts, selects the model using validation average precision, freezes a validation-derived review threshold, and evaluates 1,000 later alerts. Thirty-day gaps ensure earlier outcome labels mature before the next modeling period. It saves a reusable trained model, predictions, comparison metrics, capacity tradeoffs, feature importance, four charts and a model card.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\prediction_demo.py --approve-prediction-run
+```
+
+Open the resulting **CODEX-ASSISTED PREDICTION** workspace in **Workspace history → Results**. This is reviewed assistant-authored training code executed in Docker; the workbench does not call Codex or a local LLM for this explicit experiment. The outcome is simulated analyst escalation, not proven financial crime. For a reusable staged specification to give a capable coding agent, see the [complete predictive-model master prompt](examples/prediction/MASTER_PROMPT.md); its acceptance criteria describe additional production work as well as this demonstration.
+
+For a ready-to-run visual demonstration, use the [Codex-assisted transaction investigation showcase](examples/showcase/README.md). It analyzes the bundled 10,000 synthetic transactions in Docker and produces a dashboard, customer review queue, transaction evidence, shared-recipient flows, threshold sensitivity and downloadable outputs. The source is explicitly assistant-authored; this demonstration does not call a local or cloud model or establish autonomous model quality.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\showcase_demo.py --approve-showcase-run
+```
+
+Open the resulting **CODEX-ASSISTED SHOWCASE** in **Workspace history → Results**. The dashboard shows saved computed values only after output validation passes. The same Results interface supports any validated `workbench.dashboard.v1` JSON report with registered charts; there are no banking-specific UI branches.
+
 ```powershell
 .\.venv\Scripts\python.exe examples\generate_data.py
 ```
@@ -131,7 +147,7 @@ $env:RUN_DOCKER_TESTS = '1'
 Remove-Item Env:RUN_DOCKER_TESTS -ErrorAction SilentlyContinue
 ```
 
-The standard suite uses deterministic test adapters for model responses. Docker integration tests are separately marked and require the opt-in environment variable. Test adapters are confined to tests and the explicitly labelled fixture demo; production never fabricates proposal or execution results when a dependency is missing. UI tests use Streamlit AppTest without requiring live services.
+The standard suite uses deterministic test adapters for model responses. Docker integration tests are separately marked and require the opt-in environment variable. Authored-response adapters are confined to tests, the explicitly labelled fixture demo, and the separately labelled Codex-assisted showcase and predictive experiment; production never fabricates proposal or execution results when a dependency is missing. These explicit demonstrations supply reviewed source and contracts and record that no local model was called. UI tests use Streamlit AppTest without requiring live services.
 
 For an explicitly labelled fixture demonstration across all four computational approaches, run:
 
@@ -141,9 +157,13 @@ For an explicitly labelled fixture demonstration across all four computational a
 
 This uses reviewed fixed model-response fixtures for SQL, sklearn anomaly scoring, NetworkX graph analysis and non-banking sales analysis. All computation, model loading and output inspection still run in real Docker containers through the same generic workflow. It does not call a real LLM or demonstrate local-model reasoning. Each workspace is marked `FIXTURE DEMO` and saves `metadata/demo_fixture.json`. Without `--approve-fixture-run`, it stops at the normal approval checkpoint. `tests/test_demo_e2e.py` validates these same four cases with real Docker when opted in.
 
-**Delivery verification — 15 October 2026:** 148 tests passed: 133 non-Docker tests and 15 actual Docker integration tests. These cover provider configuration, structured responses, workflow approval and repair, output validation, UI behavior, independent smoke-result checks and manual edited-code execution. The four fixture demonstrations execute SQL, sklearn anomaly scoring, NetworkX graph analysis and sales/Plotly in restricted Docker containers; fixture responses do not establish live-model reasoning quality.
+**Delivery verification — 15 October 2026:** 170 tests passed across the recorded batches: the current 155-test non-Docker suite and 15 actual Docker integration tests from the prior run on the unchanged sandbox implementation. The Docker tests were not rerun for the dashboard/showcase additions. These cover provider configuration, structured responses, workflow approval and repair, output validation, UI behavior, independent smoke-result checks and manual edited-code execution. The four fixture demonstrations execute SQL, sklearn anomaly scoring, NetworkX graph analysis and sales/Plotly in restricted Docker containers; fixture responses do not establish live-model reasoning quality.
 
-The host was tested with Python 3.12.14; the image uses Python 3.11.17. Exact dependency inventories are in `requirements-tested-windows-py312.txt` and `sandbox/requirements-tested-linux-py311.txt`. `verification.json` records the delivery evidence. JUnit reports are kept locally and excluded from Git and the source ZIP. Streamlit AppTest is included in the test suite; HTTP health returned 200. Browser screenshot inspection was unavailable.
+The host was tested with Python 3.12.14; the image uses Python 3.11.17. Exact dependency inventories are in `requirements-tested-windows-py312.txt` and `sandbox/requirements-tested-linux-py311.txt`. `verification.json` records the delivery evidence. JUnit reports are kept locally and excluded from Git and the source ZIP. Streamlit AppTest is included in the test suite; HTTP health returned 200. The running showcase dashboard was also visually inspected in a browser, including its four metrics, findings, four Plotly charts and customer review table.
+
+**Codex-assisted showcase verification:** The reviewed synthetic analysis completed in real Docker in 4.516 seconds, with 42 validation checks and four additional independent SQL checks passing; 24 artifacts were registered. It analyzed 10,000 transactions for 532 customers, retained 483 evidence transactions and identified 106 customers meeting at least one descriptive review rule. Independently checked findings include one customer's 100 transfers in a clock hour, a recipient with 25 source accounts and 100 transfers, and five customers making 20 similar modest transfers each. These are synthetic descriptive patterns, not fraud labels or a demonstration of autonomous local-model reasoning. [showcase-verification.json](showcase-verification.json) records the actual provenance, computation, validation and limitations.
+
+**Predictive-model verification:** The supervised experiment completed in real Docker in 7.109 seconds. Logistic regression won on validation average precision. On the 1,000 untouched later alerts, average precision was 0.444 against prevalence 0.170, and ROC-AUC was 0.727. The frozen threshold prioritized 118 alerts: 64 simulated escalations and 54 false positives, giving 54.2% precision and 37.6% recall; 106 simulated escalations remained outside that queue. At the separate fixed capacity of exactly 100 reviewed alerts, the learned model captured 57 simulated escalations versus 45 for the fixed amount/activity heuristic. Reloading the saved pipeline reproduced all 1,000 test scores exactly, and five new cases with unknown outcomes were scored. Thirteen independent SQL checks reconciled the saved predictions, labels, confusion counts, average precision and Brier score. [prediction-verification.json](prediction-verification.json) preserves the computation and provenance. These results describe the synthetic label generator; they do not establish real-world FCCM effectiveness or calibrated crime probabilities.
 
 **Live model verification:** The installed Llama3.1:8b passed text generation and schema-validated structured responses. The new compatible-API adapter also passed a real structured request against Ollama's `/v1` endpoint. Bionic/Gemma itself was not tested on this host. The attempted complete live-model workflows did not pass; see `live-workflow-verification.json` for the actual failures. The first CPU run failed with generated SQL quoting syntax and then a 600-second repair timeout. Its original failure evidence remains intact. A separate manually corrected recovery is recorded explicitly as manual work, not autonomous model success. Model weights, environments and runtime workspaces are excluded from the source archive. Use `scripts/check_model.py --generate` and the optional live smoke test to check your selected local model.
 
