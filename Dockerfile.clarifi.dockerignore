@@ -1,0 +1,8 @@
+# Override the existing sandbox-only build context for this Dockerfile alone.
+*
+!requirements.txt
+!requirements-clarifi.txt
+!workbench/
+!workbench/**
+**/__pycache__
+**/*.pyc

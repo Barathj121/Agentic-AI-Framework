@@ -21,7 +21,7 @@ from workbench.service import Service
 from workbench.settings import Settings
 from workbench.workspace import safe_path
 
-PAGES = ["New workspace", "Solution proposals", "Execution monitor", "Results", "Workspace history"]
+PAGES = ["New workspace", "Solution proposals", "Execution monitor", "Results", "Workspace history", "ClariFi Agent"]
 ACTIVE = {"PROPOSING", "UNDERSTANDING", "EXPLORING", "GENERATING_PROPOSALS", "CHECKING_FEASIBILITY",
           "BUILDING", "GENERATING", "EXECUTING", "VALIDATING", "REPAIRING", "RUNNING", "QUEUED", "APPROVED",
           "EVALUATING_FEASIBILITY", "PLAN_APPROVED", "GENERATING_SOLUTION"}
@@ -450,8 +450,12 @@ def main() -> None:
     </style>""", unsafe_allow_html=True)
     if "next_page" in st.session_state:
         st.session_state["page"] = st.session_state.pop("next_page")
+    if "page" not in st.session_state and st.query_params.get("sector") == "finance":
+        st.session_state["page"] = "ClariFi Agent"
+    if st.session_state.get("page") == "Financial investigations":
+        st.session_state["page"] = "ClariFi Agent"
     service = get_service()
-    if "diagnostics" not in st.session_state:
+    if "diagnostics" not in st.session_state and st.session_state.get("page") != "ClariFi Agent":
         with st.spinner("Checking the local model and sandbox…"):
             try:
                 st.session_state["diagnostics"] = service.diagnostics()
@@ -475,7 +479,7 @@ def main() -> None:
                 st.warning(f"Workspace could not be reopened: {exc}")
         else:
             st.caption("No workspace selected")
-        with st.expander("Local environment"):
+        with st.expander("CSV workflow environment"):
             diagnostics = st.session_state.get("diagnostics", {})
             for name, label, required_key in [("llm", "Local model", "model_available"), ("docker", "Docker image", "image_available")]:
                 detail = diagnostics.get(name, diagnostics.get("ollama", {}) if name == "llm" else {})
@@ -484,6 +488,7 @@ def main() -> None:
             if diagnostics.get("provider"):
                 st.caption(f"{diagnostics['provider']} · {diagnostics.get('model', '')}")
             st.caption("Check model and sandbox availability before starting implementation.")
+            st.caption("ClariFi has its own model selection in ClariFi Agent.")
             if st.button("Check services"):
                 with st.spinner("Checking local services…"):
                     try:
@@ -493,7 +498,14 @@ def main() -> None:
             if "diagnostics" in st.session_state:
                 st.json(st.session_state["diagnostics"], expanded=False)
         st.caption("Your CSV, database, generated source, logs and outputs remain in local workspaces.")
-    if page == "New workspace":
+    if page == "ClariFi Agent":
+        try:
+            from ui.clarifi import financial_page
+            financial_page(service)
+        except ImportError:
+            st.header("ClariFi Agent")
+            st.info("Install requirements-clarifi.txt to enable the financial investigation agent.")
+    elif page == "New workspace":
         new_workspace(service, workspace)
     elif page == "Workspace history":
         history_page(service)

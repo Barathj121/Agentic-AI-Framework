@@ -1,5 +1,13 @@
 # Agentic Data Solution Workbench
 
+**Optional BFSI agent:** [ClariFi financial investigation](docs/CLARIFI.md) adds
+insider-trading indicators and shell-company/payment-network analysis through a
+registered LangGraph agent, Gemini on Vertex AI and a separate Cloud Run API.
+Open **ClariFi Agent** in the sidebar to run both cases with local Gemma
+or configured Vertex Gemini. The existing local workflow remains available. Install
+`requirements-clarifi.txt` only when using the financial agent; scores are
+explainable triage rules and require independent accuracy evaluation.
+
 A local application that turns a CSV and a business problem into proposed computational approaches. You choose and approve a proposal; a configured local model generates code, Docker executes it with resource limits, and the workbench validates and preserves its outputs. Use Ollama by default or Bionic/LM Studio's local OpenAI-compatible model API. Streamlit provides the interface, LangGraph persists the approval workflow, and each workspace has its own DuckDB database.
 
 The workflow is generic: SQL analysis, statistical methods, machine learning and graph analysis share the same builder, sandbox, validation and artifact registry. There are no banking-specific agent branches and no cloud-model fallback. A missing dependency or failed run is reported as a failure, with logs and generated files retained.

@@ -1,0 +1,9 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -f, Dockerfile.clarifi, -t, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/clarifi:${_TAG}', .]
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/clarifi:${_TAG}'
+substitutions:
+  _REGION: us-central1
+  _REPOSITORY: clarifi
+  _TAG: prototype

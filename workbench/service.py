@@ -51,6 +51,15 @@ class Service:
         ingest_csv(workspace, content, filename, self.settings)
         return workspace
 
+    def run_agent(self, agent_id: str, payload: dict, *, approved=False, mode="vertex", model=None) -> dict:
+        """Optional reviewed domain agent; independent of CSV/code-generation jobs.
+
+        Returns a report synchronously. The ClariFi API handles optional durable
+        GCS storage; existing workspace state and approval checkpoints are untouched.
+        """
+        from workbench.agents import run_agent
+        return run_agent(agent_id, payload, approved=approved, mode=mode, model=model)
+
     def _dispatch(self, workspace_id: str, action: str, **arguments):
         workspace = self.manager.get(workspace_id)
         with FileLock(str(workspace / "metadata/dispatch.lock"), timeout=1):

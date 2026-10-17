@@ -1,0 +1,35 @@
+{
+  "case_id": "synthetic-financial-demo",
+  "employees": [
+    {"employee_id": "E01", "name": "Anika Rao", "identity_key": "synthetic-key-01", "access_issuers": ["ACME"]},
+    {"employee_id": "E02", "name": "Arjun Roy", "access_issuers": ["OTHER"]}
+  ],
+  "accounts": [
+    {"account_id": "A01", "owner_name": "Anika Rao", "employee_id": "E01", "identity_key": "synthetic-key-01"},
+    {"account_id": "A02", "owner_name": "Dev Rao"},
+    {"account_id": "A03", "owner_name": "A R"},
+    {"account_id": "A04", "owner_name": "Unrelated Investor"}
+  ],
+  "relationships": [
+    {"relationship_id": "R01", "employee_id": "E01", "account_id": "A02", "relationship": "spouse", "source_reference": "Synthetic employee declaration D01"}
+  ],
+  "trades": [
+    {"trade_id": "T01", "account_id": "A01", "issuer_id": "ACME", "occurred_at": "2026-09-08T10:00:00Z", "side": "buy", "quantity": 1000, "price": 25, "currency": "USD", "precleared": false},
+    {"trade_id": "T02", "account_id": "A02", "issuer_id": "ACME", "occurred_at": "2026-09-09T10:00:00Z", "side": "buy", "quantity": 1000, "price": 25, "currency": "USD", "precleared": false},
+    {"trade_id": "T03", "account_id": "A03", "issuer_id": "ACME", "occurred_at": "2026-09-09T10:00:00Z", "side": "buy", "quantity": 1000, "price": 25, "currency": "USD"},
+    {"trade_id": "T04", "account_id": "A04", "issuer_id": "ACME", "occurred_at": "2026-09-12T10:00:00Z", "side": "sell", "quantity": 50, "price": 25, "currency": "USD", "precleared": true}
+  ],
+  "events": [{"event_id": "EV01", "issuer_id": "ACME", "public_at": "2026-09-10T12:00:00Z", "description": "Synthetic public earnings announcement"}],
+  "entities": [
+    {"entity_id": "C01", "name": "Demo Alpha", "registered_address": "100 Example Road", "bank_account": "SYNTHETIC-001", "bank_routing": "ROUTE-01"},
+    {"entity_id": "C02", "name": "Demo Beta", "registered_address": "100 Example Road", "bank_account": "SYNTHETIC-001", "bank_routing": "ROUTE-01"},
+    {"entity_id": "C03", "name": "Demo Gamma", "registered_address": "300 Example Road", "bank_account": "SYNTHETIC-003", "bank_routing": "ROUTE-01"},
+    {"entity_id": "C04", "name": "Independent Supplier", "registered_address": "400 Example Road", "bank_account": "SYNTHETIC-004", "bank_routing": "ROUTE-01"}
+  ],
+  "payments": [
+    {"transaction_id": "P01", "sender_id": "C01", "receiver_id": "C02", "amount": 10000, "currency": "USD", "occurred_at": "2026-09-01T10:00:00Z"},
+    {"transaction_id": "P02", "sender_id": "C02", "receiver_id": "C03", "amount": 9800, "currency": "USD", "occurred_at": "2026-09-02T10:00:00Z"},
+    {"transaction_id": "P03", "sender_id": "C03", "receiver_id": "C01", "amount": 9500, "currency": "USD", "occurred_at": "2026-09-03T10:00:00Z"},
+    {"transaction_id": "P04", "sender_id": "C04", "receiver_id": "C03", "amount": 1000, "currency": "USD", "occurred_at": "2026-09-04T10:00:00Z", "purpose": "Synthetic equipment payment"}
+  ]
+}
