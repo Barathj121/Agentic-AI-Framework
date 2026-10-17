@@ -64,6 +64,9 @@ def test_model_is_only_inspected_through_sandbox(artifact_workspace):
     assert result["passed"]
     assert any(c["kind"] == "model_load" for c in inspector.requested)
     assert any(a["type"] == "model" for a in result["artifacts"])
+    import hashlib
+    registered = next(a for a in result["artifacts"] if a["location"] == "models/model.joblib")
+    assert registered["sha256"] == hashlib.sha256(b"untrusted bytes").hexdigest()
 
 
 def test_missing_and_empty_outputs_fail(artifact_workspace):

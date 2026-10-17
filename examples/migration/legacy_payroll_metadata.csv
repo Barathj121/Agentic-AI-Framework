@@ -1,0 +1,9 @@
+column_name,data_type,required,description,business_glossary_term,transformation_hint
+worker_code,VARCHAR,true,Stable employee identifier in the source payroll system,employee identifier,
+person_name,VARCHAR,true,Full display name of the employee,employee full name,
+monthly_base_pay,DOUBLE,true,Contractual monthly base salary in the employee local currency excluding bonus and overtime,monthly base salary,Annual base salary is monthly base salary multiplied by 12
+joined_on,VARCHAR,true,Employment start date represented as ISO YYYY-MM-DD text,hire date,
+dept_code,VARCHAR,true,Numeric department identifier represented as text,department identifier,
+office_email,VARCHAR,false,Employee company email address,company email,
+country,VARCHAR,true,Two-letter work-country code,work country,
+worker_class,VARCHAR,true,Engagement category FTE=full-time CON=contractor TRN=trainee; does not indicate active employment status,engagement category,

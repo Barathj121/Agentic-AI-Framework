@@ -1,0 +1,10 @@
+column_name,data_type,required,description,allowed_values,transformation_hint
+employee_id,VARCHAR,true,Stable employee identifier,,
+employee_name,VARCHAR,true,Full employee display name,,
+annual_base_salary,"DECIMAL(18,2)",true,Annual contractual base salary in local currency excluding bonus and overtime,,Multiply documented monthly base salary by 12
+hire_date,DATE,true,Employment start date,,Parse ISO YYYY-MM-DD date
+department_number,INTEGER,true,Numeric department identifier,,Convert numeric department text to integer
+company_email,VARCHAR,false,Employee company email address,,
+work_country,VARCHAR,true,Two-letter work-country code,IN|SG|US,
+employment_status,VARCHAR,false,Whether employee is currently ACTIVE or INACTIVE,ACTIVE|INACTIVE,Do not infer current employment status from engagement category
+tax_identifier,VARCHAR,true,Government-issued employee tax identifier,,Must be provided by an authoritative source; do not synthesize

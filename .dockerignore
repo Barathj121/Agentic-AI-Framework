@@ -3,3 +3,6 @@
 !sandbox/Dockerfile
 !sandbox/requirements.txt
 !sandbox/runner.py
+!examples/
+!examples/external_app/
+!examples/external_app/app.py

@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import httpx
 
 from workbench.data import ingest_csv
-from workbench.schemas import BuildResult, ExecutionResult, Proposal, ProposalSet, Understanding
+from workbench.llm import OllamaClient
+from workbench.schemas import BuildResult, ExecutionResult, OutputSpec, Proposal, ProposalSet, Understanding
 from workbench.settings import Settings
 from workbench.workflow import Workflow
 from workbench.workspace import WorkspaceManager
@@ -109,7 +113,12 @@ def test_durable_approval_is_required_before_any_execution(prepared):
     assert sandbox.calls == []
     assert not (workspace / "generated/solution.py").exists()
     assert (workspace / "metadata/checkpoints.sqlite").stat().st_size > 0
-    # A fresh process-equivalent instance must resume the persisted graph, with
+    with sqlite3.connect(workspace / "metadata/checkpoints.sqlite") as connection:
+        stages = [row[0] for row in connection.execute("SELECT stage FROM adk_stage_history ORDER BY id")]
+    assert stages == ["start", "understand", "explore", "proposals", "feasibility"]
+    events = [json.loads(line) for line in (workspace / "logs/adk-workflow.jsonl").read_text().splitlines()]
+    assert all(event["author"] == "data_workbench" and event.get("invocation_id") for event in events)
+    # A fresh process-equivalent instance must resume the persisted ADK workflow, with
     # no dependency on the first object's in-memory state or a Streamlit session.
     second = Workflow(settings, llm=FixtureLLM([build()]), sandbox=sandbox)
     state = second.approve(workspace, "aggregate", "Retain the measured units")
@@ -139,7 +148,77 @@ def test_missing_columns_unavailable_dependencies_and_resources_block_approval(p
     assert len(manager.read(workspace, "metadata/feasibility.json")["checks"][0]["errors"]) == 5
     with pytest.raises(ValueError, match="NOT_FEASIBLE"):
         workflow.approve(workspace, "aggregate")
+    assert len(workflow.llm.calls) == 2  # Genuine missing input does not trigger derived-column repair.
     assert not sandbox.calls
+
+
+def derived_output_plan(**updates):
+    return proposal(expected_outputs=[{
+        "name": "Derived result", "type": "database_table", "location": "results.analysis_table",
+        "required_columns": ["item", "derived_value"],
+    }], **updates)
+
+
+def test_planning_repairs_declared_output_columns_mistaken_for_source_inputs(prepared):
+    settings, _, workspace = prepared
+    invalid = ProposalSet(proposals=[derived_output_plan(required_columns=["item", "derived_value"])])
+    corrected = ProposalSet(proposals=[derived_output_plan(required_columns=["item", "amount"])])
+    llm = FixtureLLM([planning_responses()[0], invalid, corrected])
+    sandbox = FixtureSandbox()
+    result = Workflow(settings, llm=llm, sandbox=sandbox).propose(workspace)
+    assert result["status"] == "AWAITING_APPROVAL", result.get("error")
+    assert result["proposals"][0]["feasibility"] == "FEASIBLE"
+    assert result["proposals"][0]["required_columns"] == ["item", "amount"]
+    assert result["proposals"][0]["expected_outputs"] == corrected.proposals[0].model_dump()["expected_outputs"]
+    feedback = json.loads(llm.calls[2][2])["semantic_repair"]
+    assert feedback["allowed_source_columns"] == ["item", "amount"]
+    assert feedback["issues"] == [{"proposal_id": "aggregate", "unknown_source_columns": ["derived_value"],
+                                   "declared_output_columns_used_as_inputs": ["derived_value"]}]
+    assert feedback["previous_response"] == invalid.model_dump(mode="json")
+    assert not sandbox.calls
+
+
+@pytest.mark.parametrize("repair_limit", [0, 1, 2])
+def test_unresolved_output_as_input_stays_not_feasible_after_bounded_planning_repairs(prepared, repair_limit):
+    settings, _, workspace = prepared
+    settings = replace(settings, max_repair_attempts=repair_limit)
+    invalid = ProposalSet(proposals=[derived_output_plan(required_columns=["item", "derived_value"])])
+    llm = FixtureLLM([planning_responses()[0]] + [invalid] * (repair_limit + 1))
+    sandbox = FixtureSandbox()
+    workflow = Workflow(settings, llm=llm, sandbox=sandbox)
+    result = workflow.propose(workspace)
+    assert result["status"] == "AWAITING_APPROVAL", result.get("error")
+    assert result["proposals"][0]["feasibility"] == "NOT_FEASIBLE"
+    assert result["proposals"][0]["required_columns"] == ["item", "derived_value"]
+    assert len(llm.calls) == repair_limit + 2
+    events = [json.loads(line) for line in (workspace / "logs/agent.jsonl").read_text().splitlines()]
+    rejected = [event["details"] for event in events if "source_column_issues" in event["details"]]
+    assert len(rejected) == repair_limit + 1
+    assert rejected[-1]["will_retry"] is False
+    with pytest.raises(ValueError, match="NOT_FEASIBLE"):
+        workflow.approve(workspace, "aggregate")
+    assert not sandbox.calls
+
+
+def test_planning_cancellation_between_semantic_repairs_stops_model_calls(prepared, monkeypatch):
+    settings, _, workspace = prepared
+    invalid = ProposalSet(proposals=[derived_output_plan(required_columns=["item", "derived_value"])])
+    llm = FixtureLLM([planning_responses()[0], invalid])
+    sandbox = FixtureSandbox()
+    workflow = Workflow(settings, llm=llm, sandbox=sandbox)
+    record_event = workflow.manager.event
+
+    def cancel_after_rejection(current_workspace, stage, message, **details):
+        record_event(current_workspace, stage, message, **details)
+        if "source_column_issues" in details:
+            (workspace / "metadata/cancel.requested").touch()
+
+    monkeypatch.setattr(workflow.manager, "event", cancel_after_rejection)
+    result = workflow.propose(workspace)
+    assert result["status"] == "CANCELLED"
+    assert len(llm.calls) == 2
+    assert not sandbox.calls
+    assert not (workspace / "metadata/proposals.json").exists()
 
 
 def test_rejection_persists_without_execution_and_new_proposals_are_possible(prepared):
@@ -272,14 +351,126 @@ def test_workflow_disables_ambient_cloud_tracing(prepared, monkeypatch):
     assert os.environ["LANGCHAIN_TRACING_V2"] == "false"
 
 
-def test_understanding_cannot_invent_relevant_columns(prepared):
+@pytest.mark.parametrize("repair_limit", [0, 1, 2])
+def test_understanding_cannot_invent_relevant_columns(prepared, repair_limit):
     settings, _, workspace = prepared
-    llm = FixtureLLM([Understanding(summary="Invented label", relevant_columns=["fraud_label"])])
-    workflow = Workflow(settings, llm=llm, sandbox=FixtureSandbox())
+    settings = replace(settings, max_repair_attempts=repair_limit)
+    invalid = Understanding(summary="Invented label", relevant_columns=["fraud_label"])
+    llm = FixtureLLM([invalid] * (repair_limit + 1))
+    sandbox = FixtureSandbox()
+    workflow = Workflow(settings, llm=llm, sandbox=sandbox)
     result = workflow.propose(workspace)
     assert result["status"] == "FAILED"
     assert "absent from the actual schema" in result["error"]
+    assert len(llm.calls) == repair_limit + 1
+    assert all(call[0] is Understanding for call in llm.calls)
+    assert not (workspace / "metadata/understanding.json").exists()
+    assert not sandbox.calls
+    events = [json.loads(line) for line in (workspace / "logs/agent.jsonl").read_text().splitlines()]
+    rejected = [event["details"] for event in events if "unknown_source_columns" in event["details"]]
+    assert len(rejected) == repair_limit + 1
+    assert rejected[-1]["will_retry"] is False
+    assert rejected[-1]["unknown_source_columns"] == ["fraud_label"]
+
+
+def test_understanding_repairs_derived_output_as_source_with_exact_schema_feedback(prepared):
+    settings, manager, workspace = prepared
+    invalid = Understanding(summary="Compute total_amount from source amounts", relevant_columns=["amount", "total_amount"])
+    corrected = Understanding(summary="Compute total_amount from source amounts", relevant_columns=["amount"])
+    llm = FixtureLLM([invalid, corrected, ProposalSet(proposals=[proposal()])])
+    sandbox = FixtureSandbox()
+    result = Workflow(settings, llm=llm, sandbox=sandbox).propose(workspace)
+
+    assert result["status"] == "AWAITING_APPROVAL", result.get("error")
+    assert len(llm.calls) == 3
+    first = json.loads(llm.calls[0][2])
+    repair = json.loads(llm.calls[1][2])
+    assert first["available_source_columns"] == ["item", "amount"]
+    assert repair["available_source_columns"] == first["available_source_columns"]
+    assert repair["semantic_repair"]["allowed_source_columns"] == first["available_source_columns"]
+    assert "total_amount" in repair["semantic_repair"]["error"]
+    assert repair["semantic_repair"]["previous_response"] == invalid.model_dump(mode="json")
+    assert manager.read(workspace, "metadata/understanding.json") == corrected.model_dump(mode="json")
+    assert not sandbox.calls
+
+
+def test_understanding_cancellation_between_semantic_repairs_stops_model_calls(prepared, monkeypatch):
+    settings, _, workspace = prepared
+    llm = FixtureLLM([Understanding(summary="Requested aggregate", relevant_columns=["total_amount"])])
+    sandbox = FixtureSandbox()
+    workflow = Workflow(settings, llm=llm, sandbox=sandbox)
+    record_event = workflow.manager.event
+
+    def cancel_after_rejection(current_workspace, stage, message, **details):
+        record_event(current_workspace, stage, message, **details)
+        if "unknown_source_columns" in details:
+            (workspace / "metadata/cancel.requested").touch()
+
+    monkeypatch.setattr(workflow.manager, "event", cancel_after_rejection)
+    result = workflow.propose(workspace)
+    assert result["status"] == "CANCELLED"
     assert len(llm.calls) == 1
+    assert not sandbox.calls
+    assert not (workspace / "metadata/understanding.json").exists()
+
+
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+def test_real_adk_planning_repair_distinguishes_database_locations_and_source_columns(prepared, repair_succeeds):
+    settings, manager, workspace = prepared
+    settings = replace(settings, ollama_model="gemma-fixture:4b")
+    plan = proposal(expected_outputs=[{
+        "name": "Calculated result", "type": "database_table", "location": "results.analysis_table",
+        "required_columns": ["derived_value"], "min_rows": 1,
+    }])
+    valid = ProposalSet(proposals=[plan]).model_dump(mode="json")
+    requests = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if len(requests) == 1:
+            response = planning_responses()[0].model_dump(mode="json")
+        else:
+            response = json.loads(json.dumps(valid))
+            if len(requests) < 4 or not repair_succeeds:
+                response["proposals"][0]["expected_outputs"][0]["location"] = (
+                    "results/" if len(requests) != 3 else "results/analysis_table.db"
+                )
+        return httpx.Response(200, json={"message": {"content": json.dumps(response)}, "done_reason": "stop"})
+
+    llm = OllamaClient(settings, client=httpx.Client(transport=httpx.MockTransport(respond)))
+    sandbox = FixtureSandbox()
+    result = Workflow(settings, llm=llm, sandbox=sandbox).propose(workspace)
+    assert len(requests) == 4  # One understanding call and at most three planner attempts.
+    assert not sandbox.calls
+    context = json.loads(requests[1]["messages"][1]["content"])
+    assert context["available_source_columns"] == ["item", "amount"]
+    for request in requests[1:]:
+        system = request["messages"][0]["content"]
+        assert '"location":"results.analysis_table"' in system
+        assert '"location":"results/report.csv"' in system
+        assert "SOURCE INPUTS" in system
+        assert "Required JSON schema:" in system
+    repair_message = requests[2]["messages"][1]["content"]
+    assert "proposals.0.expected_outputs.0" in repair_message
+    assert "Use a dot, never a directory" in repair_message
+    if repair_succeeds:
+        assert result["status"] == "AWAITING_APPROVAL", result.get("error")
+        assert result["proposals"][0]["required_columns"] == ["amount"]
+        output = result["proposals"][0]["expected_outputs"][0]
+        assert output["location"] == "results.analysis_table"
+        assert output["required_columns"] == ["derived_value"]
+    else:
+        assert result["status"] == "FAILED"
+        assert "after 3 attempts" in result["error"]
+        assert not manager.read(workspace, "metadata/proposals.json", {})
+
+
+@pytest.mark.parametrize("location", ["results", "results/", "models/", "notebooks/"])
+def test_file_output_contract_requires_a_filename(location):
+    with pytest.raises(ValueError, match="include a filename"):
+        OutputSpec(name="Output", type="custom_format", location=location)
+    assert OutputSpec(name="Opaque result", type="custom_format", location="results/opaque").location == "results/opaque"
 
 
 def test_exploration_masks_strings_even_if_identifiers_are_aliased(prepared):

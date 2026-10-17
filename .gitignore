@@ -1,5 +1,6 @@
 .venv/
 .env
+local-runtime.json
 __pycache__/
 .pytest_cache/
 workspaces/

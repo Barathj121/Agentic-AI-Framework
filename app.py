@@ -21,7 +21,7 @@ from workbench.service import Service
 from workbench.settings import Settings
 from workbench.workspace import safe_path
 
-PAGES = ["New workspace", "Solution proposals", "Execution monitor", "Results", "Workspace history"]
+PAGES = ["Home", "Migration Studio", "External applications", "New workspace", "Solution proposals", "Execution monitor", "Results", "Workspace history"]
 ACTIVE = {"PROPOSING", "UNDERSTANDING", "EXPLORING", "GENERATING_PROPOSALS", "CHECKING_FEASIBILITY",
           "BUILDING", "GENERATING", "EXECUTING", "VALIDATING", "REPAIRING", "RUNNING", "QUEUED", "APPROVED",
           "EVALUATING_FEASIBILITY", "PLAN_APPROVED", "GENERATING_SOLUTION"}
@@ -39,6 +39,38 @@ def navigate(page: str) -> None:
 
 def records_frame(result: dict) -> pd.DataFrame:
     return pd.DataFrame(result.get("rows", []), columns=result.get("columns", []))
+
+
+def home_page(service: Service) -> None:
+    st.header("Agentic Data & Application Workbench")
+    st.write("Build, execute and explore data-driven solutions.")
+    st.subheader("Applications")
+    migration, external = st.columns(2)
+    with migration.container(border=True):
+        st.subheader("Migration Studio")
+        st.write("Assess source-to-target fit, review mappings, transform data and export a reusable connector.")
+        if st.button("Launch Migration Studio", type="primary", width="stretch"):
+            navigate("Migration Studio")
+    with external.container(border=True):
+        st.subheader("External application")
+        st.write("Register and launch a trusted local Docker application.")
+        if st.button("Register / launch application", width="stretch"):
+            navigate("External applications")
+    st.subheader("Data experimentation")
+    st.write("Upload data and describe a business problem. Agents propose, generate, execute and validate computational solutions after your approval.")
+    if st.button("Open Data Workbench", width="stretch"):
+        navigate("New workspace")
+    st.subheader("Workspaces")
+    recent = service.manager.list()
+    st.caption(f"{len(recent)} saved workspaces · Results · Artifacts")
+    if recent:
+        st.dataframe(pd.DataFrame([
+            {"Name": item.get("name", item["id"]), "Status": item.get("status", "UNKNOWN"),
+             "Updated": item.get("updated_at", "")}
+            for item in recent[:5]
+        ]), hide_index=True, width="stretch")
+    if st.button("Browse workspace history"):
+        navigate("Workspace history")
 
 
 def profile_panel(service: Service, workspace: Path) -> None:
@@ -372,11 +404,13 @@ def artifact_panel(workspace: Path, artifact: dict, key: str) -> None:
 
 def results_page(service: Service, workspace: Path) -> None:
     from ui.dashboard import ordered_artifacts, render_dashboard
+    from ui.prediction import render_prediction
 
     st.header("Results & evidence")
     manifest = service.manager.read(workspace, "metadata/manifest.json", {}) or {}
     validation = service.manager.read(workspace, "metadata/validation.json", {}) or {}
     artifacts = manifest.get("artifacts", [])
+    render_prediction(service.settings, workspace)
     render_dashboard(workspace, artifacts, validation)
     selected = service.manager.read(workspace, "metadata/selected_plan.json", {}) or {}
     selected = selected.get("proposal", selected)
@@ -435,12 +469,15 @@ def history_page(service: Service) -> None:
             left.caption(f"{item.get('status', 'UNKNOWN')} · Updated {item.get('updated_at', 'unknown')} · {item['id']}")
             left.write(str(item.get("problem", ""))[:500])
             if right.button("Open workspace", key=f"open_{item['id']}", width="stretch"):
+                if item.get("kind") == "migration":
+                    st.session_state["migration_workspace_id"] = item["id"]
+                    navigate("Migration Studio")
                 st.session_state["workspace_id"] = item["id"]
                 navigate("Results" if item.get("status") == "COMPLETED" else "Solution proposals" if item.get("status") == "AWAITING_APPROVAL" else "New workspace")
 
 
 def main() -> None:
-    st.set_page_config(page_title="Data Solution Workbench", page_icon="◈", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="Agentic Data & Application Workbench", page_icon="◈", layout="wide", initial_sidebar_state="expanded")
     st.markdown("""<style>
     .block-container {padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1320px;}
     [data-testid="stSidebar"] {background-color: #eef2f6;}
@@ -459,8 +496,8 @@ def main() -> None:
                 st.session_state["diagnostics"] = {"error": str(exc)}
     workspace = None
     with st.sidebar:
-        st.markdown("### ◈ Data Solution\nWorkbench")
-        st.caption("LOCAL-FIRST · APPROVAL-GATED")
+        st.markdown("### ◈ Data & Application\nWorkbench")
+        st.caption("GOOGLE ADK · LOCAL MODELS · HUMAN APPROVAL")
         st.divider()
         page = st.radio("Workspace workflow", PAGES, key="page", label_visibility="collapsed")
         st.divider()
@@ -493,7 +530,15 @@ def main() -> None:
             if "diagnostics" in st.session_state:
                 st.json(st.session_state["diagnostics"], expanded=False)
         st.caption("Your CSV, database, generated source, logs and outputs remain in local workspaces.")
-    if page == "New workspace":
+    if page == "Home":
+        home_page(service)
+    elif page == "Migration Studio":
+        from ui.migration import render_migration
+        render_migration(service.settings, service.manager)
+    elif page == "External applications":
+        from ui.applications import render_applications
+        render_applications(service.settings, navigate=lambda target: navigate("Migration Studio" if target == "migration" else target))
+    elif page == "New workspace":
         new_workspace(service, workspace)
     elif page == "Workspace history":
         history_page(service)

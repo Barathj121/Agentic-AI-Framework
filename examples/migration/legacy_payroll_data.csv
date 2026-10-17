@@ -1,0 +1,9 @@
+worker_code,person_name,monthly_base_pay,joined_on,dept_code,office_email,country,worker_class
+E001,Asha Demo,7200.50,2022-02-14,101,asha@example.invalid,IN,FTE
+E002,Ben Example,6100.00,2021-06-01,102,ben@example.invalid,SG,CON
+E003,Chen Sample,5800.25,2023-03-12,103,chen@example.invalid,SG,FTE
+E004,Diya Synthetic,4500.00,not-a-date,104,diya@example.invalid,IN,TRN
+E005,Elena Demo,8100.00,2020-09-20,unknown,elena@example.invalid,US,FTE
+E006,Faisal Example,5200.00,2024-04-08,102,,IN,CON
+E007,Grace Sample,6400.00,2023-11-17,101,grace@example.invalid,ZZ,FTE
+E008,Hari Synthetic,4900.00,2024-01-05,104,hari@example.invalid,IN,TRN

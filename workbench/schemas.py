@@ -24,10 +24,15 @@ def relative_location(value: str) -> str:
 
 
 class OutputSpec(Contract):
-    name: str = Field(min_length=1, max_length=200)
-    type: str = Field(min_length=1, max_length=80)
-    location: str = Field(min_length=1, max_length=500)
-    required_columns: list[str] = Field(default_factory=list)
+    name: str = Field(min_length=1, max_length=200, description="Human-readable artifact label; its storage identifier belongs in location.")
+    type: str = Field(min_length=1, max_length=80, description="Artifact kind, such as database_table, database_view, csv, json, model, chart or notebook; other file formats are allowed.")
+    location: str = Field(min_length=1, max_length=500, description=(
+        "For database_table/database_view use a qualified DuckDB identifier with a dot, e.g. results.analysis_table "
+        "(allowed schemas: results, features, staging). Never a directory, slash path or .db file. "
+        "For file artifacts use a complete relative filename, e.g. results/report.csv, models/model.joblib "
+        "or notebooks/solution.ipynb; never just a directory."
+    ))
+    required_columns: list[str] = Field(default_factory=list, description="Columns required in this produced output, including newly derived columns; these are distinct from source input columns.")
     min_rows: int | None = Field(default=None, ge=0)
     allow_empty: bool = False
     description: str = ""
@@ -37,11 +42,13 @@ class OutputSpec(Contract):
         if self.type in {"database_table", "database_view"}:
             import re
             if not re.fullmatch(r"(?:staging|features|results)\.[A-Za-z_][A-Za-z0-9_]*", self.location):
-                raise ValueError("Database outputs must be schema.table in staging, features or results")
+                raise ValueError("Database output location must be schema.table in staging, features or results, e.g. results.analysis_table. Use a dot, never a directory, slash path or .db filename.")
         else:
             self.location = relative_location(self.location)
             if self.location.split("/")[0] not in {"results", "models", "notebooks", "generated"}:
                 raise ValueError("Output files must be in results, models, notebooks or generated")
+            if "/" not in self.location or self.location.endswith("/"):
+                raise ValueError("File output location must include a filename, e.g. results/report.csv; a directory alone is not an output file")
         return self
 
 
@@ -51,7 +58,11 @@ class Proposal(Contract):
     description: str
     approach: str
     implementation_steps: list[str]
-    required_columns: list[str]
+    required_columns: list[str] = Field(description=(
+        "Existing source input columns needed by this computation. Exclude derived or aggregate output columns; "
+        "put those in expected_outputs.required_columns. If a genuinely necessary input is absent, explain it "
+        "and mark the proposal NOT_FEASIBLE."
+    ))
     expected_outputs: list[OutputSpec] = Field(min_length=1)
     advantages: list[str]
     limitations: list[str]

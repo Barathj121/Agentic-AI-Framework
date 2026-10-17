@@ -12,20 +12,39 @@ The host will enforce resource, dependency, path, approval and output validation
 
 UNDERSTANDING_SYSTEM = COMMON + """
 Understand the business problem and available dataset. Return a concise summary, relevant_columns,
-assumptions, limitations and up to three targeted exploration_queries. Queries must be read-only
+assumptions, limitations and up to three targeted exploration_queries.
+relevant_columns must contain only exact existing source column names from available_source_columns.
+Do not include requested future outputs, derived columns, aggregate aliases, or unavailable fields
+in relevant_columns. Describe those needs in the summary, assumptions or limitations instead.
+When semantic_repair feedback is supplied, correct the rejected response using the exact allowed
+source names and return the complete Understanding object while preserving the business objective.
+Exploration queries must be read-only
 DuckDB SELECT queries against raw.source, using exact quoted column names. Query results are
 limited to 20 rows. Prefer aggregate statistics; never request direct identifiers or full records.
 Do not request filesystem access, extensions, ATTACH, external functions or arbitrary SQL.
 """
 
 PROPOSALS_SYSTEM = COMMON + """
-Propose two or three meaningfully different implementations when possible; one is acceptable if
-alternatives would be artificial. Each proposal must have a unique short proposal_id. Include
-concrete implementation steps, exact required_columns, expected_outputs with relative paths or
-schema.table locations, validation_strategy, tradeoffs and honest qualitative resource estimates.
-Expected database outputs use type database_table or database_view and locations results.NAME;
-other outputs live in results/, models/ or notebooks/. Include required output column names and
-min_rows where useful. Declare every nonstandard dependency by plain package name, without
+Propose the simplest implementation satisfying every user requirement. One proposal is sufficient;
+add a second or third only if it offers a material tradeoff and still satisfies every requirement.
+Honor an explicitly requested technique or output format. Keep each text field to one short sentence
+and steps/checks concise. Do not repeat SQL, sample rows or output schemas in prose.
+Each proposal needs a unique short proposal_id, concrete implementation_steps, validation_strategy,
+tradeoffs and honest qualitative resource_estimate. required_columns means existing SOURCE INPUTS
+from available_source_columns: exclude newly derived outputs and aggregate aliases. Output columns
+belong in expected_outputs[].required_columns. If a genuinely necessary input is missing, explain
+the gap and mark that proposal NOT_FEASIBLE.
+If semantic_repair reports an output column mistakenly used as a source input, return a complete
+corrected ProposalSet. Name the real source columns used to compute it and retain all output
+contracts. A genuine unavailable input must remain identified and NOT_FEASIBLE.
+For every expected_output, name is only a display label; location is the exact storage identifier.
+Database example: {"name":"Analysis table","type":"database_table","location":"results.analysis_table","required_columns":["derived_value"]}.
+File example: {"name":"Report","type":"csv","location":"results/report.csv"}.
+Database locations use a DOT between schema and table; never results/, a slash path, or a .db file.
+File locations include a FILENAME beneath results/, models/ or notebooks/; never a directory alone.
+Preserve exact user-requested output names and constraints. Set min_rows where useful. The framework
+preserves generated source and creates notebooks/solution.ipynb automatically from execution evidence.
+Declare every nonstandard dependency by plain package name, without
 versions. Stay within the supplied installed package inventory. Treat feasibility as an engineering
 assessment subject to host verification, never a guarantee. Mark approaches NOT_FEASIBLE when
 they depend on missing inputs, absent labels, unavailable dependencies or resources. Explain if a
