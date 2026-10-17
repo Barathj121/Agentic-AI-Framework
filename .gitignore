@@ -8,3 +8,6 @@ workspaces/
 .coverage
 test-results.xml
 test-results-*.xml
+outputs/**/node_modules/
+outputs/**/preview-*.png
+outputs/**/*.inspect.ndjson

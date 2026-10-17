@@ -24,6 +24,21 @@ DRAFT_INSTRUCTION = (
     "treasury explanations and unresolved evidence. Provide analyst follow-up questions. "
     "This draft requires human review; no filing or trading recommendation.")
 
+# Text investigation candidates. Quotas are project-specific, never hardcoded.
+# Model IDs follow Google's Interactions model catalog; access still needs checking.
+API_MODELS = {
+    "gemini-3.5-flash-lite": {"label": "Gemini 3.5 Flash-Lite", "description": "Default for routine planning and evidence-linked drafts."},
+    "gemini-3.1-flash-lite": {"label": "Gemini 3.1 Flash-Lite", "description": "Another lightweight text model for investigation workflows."},
+    "gemini-3.8-flash": {"label": "Gemini 3.8 Flash", "description": "General reasoning model. Check its daily quota before use."},
+    "gemini-3.7-flash": {"label": "Gemini 3.7 Flash", "description": "Alternative Flash text model; project access varies."},
+    "gemini-3.6-flash": {"label": "Gemini 3.6 Flash", "description": "Alternative Flash text model; project access varies."},
+    "gemini-2.5-flash-lite": {"label": "Gemini 2.5 Flash-Lite", "description": "Earlier lightweight text model; availability depends on the project."},
+    "gemini-2.5-flash": {"label": "Gemini 2.5 Flash", "description": "Earlier text model; availability depends on the project."},
+    "gemma-4-26b-a4b-it": {"label": "Gemma 4 26B A4B · experimental API", "description": "Experimental: model lookup passed but the local structured planning test timed out. Prefer verified Gemini 3.5 Flash-Lite for now."},
+    "gemma-4-31b-it": {"label": "Gemma 4 31B · experimental API", "description": "Experimental: listed by Google's API, but an end-to-end investigation has not been verified. Local Gemma is a separate option."},
+}
+DEFAULT_API_MODEL = "gemini-3.5-flash-lite"
+
 
 def scoped_plan_schema(context):
     """Constrain decoding to tools this input can actually invoke."""
@@ -104,8 +119,34 @@ def gemini_api_config():
     local = dotenv_values(path) if path.is_file() else {}
     return {
         "key": os.environ.get("GEMINI_API_KEY") or local.get("GEMINI_API_KEY", ""),
-        "model": os.environ.get("CLARIFI_API_MODEL") or local.get("CLARIFI_API_MODEL") or "gemini-3.8-flash",
+        "model": os.environ.get("CLARIFI_API_MODEL") or local.get("CLARIFI_API_MODEL") or DEFAULT_API_MODEL,
     }
+
+
+def gemini_request_error(error, *, timeout_seconds=90):
+    """Safe, actionable errors; exception messages may contain credentials or rows."""
+    import httpx
+    chain = error
+    seen = set()
+    while chain is not None and id(chain) not in seen:
+        seen.add(id(chain))
+        if isinstance(chain, (TimeoutError, httpx.TimeoutException)) or type(chain).__name__ == "APITimeoutError":
+            return f"Gemini request timed out after {timeout_seconds} seconds without completing. No investigation result was saved. Try again; this timeout does not establish a credentials or quota problem."
+        if isinstance(chain, httpx.NetworkError) or type(chain).__name__ == "APIConnectionError":
+            return "Gemini could not be reached. Check this machine's internet connection, proxy or firewall, then try again. No investigation result was saved."
+        chain = chain.__cause__ or chain.__context__
+    code = (getattr(error, "status_code", None) or getattr(error, "code", None)
+            or getattr(getattr(error, "response", None), "status_code", None))
+    # Only emit actual HTTP status codes; never arbitrary SDK values.
+    if isinstance(code, int) and not isinstance(code, bool) and 100 <= code <= 599:
+        advice = ("Check the API key and its restrictions." if code in {401, 403} else
+                  "Google rejected the request because of rate limits or quota. Check API usage and retry later." if code == 429 else
+                  "The selected model is unavailable for this API key. Check the model ID and project access." if code == 404 else
+                  "Google rejected the request format. Check the configured model and request schema." if code == 400 else
+                  "Google's service returned an error. Try again later." if code >= 500 else
+                  "Google rejected the request. Check the model configuration.")
+        return f"Gemini API request failed (HTTP {code}). {advice}"
+    return "Gemini request failed before an HTTP response was received. Check connectivity and try again. No investigation result was saved."
 
 
 class GeminiAPIReasoner(VertexReasoner):
@@ -132,38 +173,51 @@ class GeminiAPIReasoner(VertexReasoner):
             return {"available": True, "model_available": True, "model": self.model}
         except Exception as error:
             return {"available": False, "model_available": False, "model": self.model,
-                    "error": f"Gemini check failed (HTTP {getattr(error, 'code', 'unavailable')}). Check key restrictions, model access and quota."}
+                    "error": gemini_request_error(error)}
 
     def _generate(self, schema, instruction, payload):
         response_schema = gemini_json_schema(schema.model_json_schema())
         if schema is Narrative:
-            count = len(payload["findings"])
-            response_schema["properties"]["claims"].update(minItems=count, maxItems=count)
-        try:
-            with self._client() as client:
-                response = client.interactions.create(
-                    model=self.model, input=json.dumps(payload, ensure_ascii=False),
-                    system_instruction=instruction, store=False, timeout=90,
-                    generation_config={"max_output_tokens": 8192, "thinking_level": "low"},
-                    response_format={"type": "text", "mime_type": "application/json",
-                                     "schema": response_schema})
-        except Exception as error:
-            # Never echo SDK request data, URLs or raw exception text containing keys.
-            code = getattr(error, "status_code", None) or getattr(error, "code", None) or "unavailable"
-            raise RuntimeError(f"Gemini API request failed (HTTP {code}); check credentials, permissions and quota") from None
-        if response.status != "completed":
+            # Tight large-array bounds can make Google's constrained schema
+            # reject a 25-finding draft. Pydantic still caps claims, and the
+            # agent verifies exact finding coverage and associated citations.
+            claims = response_schema["properties"]["claims"]
+            claims.pop("minItems", None)
+            claims.pop("maxItems", None)
+        generation = {"max_output_tokens": 8192}
+        if self.model.startswith("gemini-3"):
+            generation["thinking_level"] = "low"
+        packet = self._interaction({"model": self.model, "input": json.dumps(payload, ensure_ascii=False),
+            "system_instruction": instruction, "store": False,
+            "generation_config": generation,
+            "response_format": {"type": "text", "mime_type": "application/json", "schema": response_schema}})
+        if packet.get("status") != "completed":
             raise ValueError("Gemini interaction did not complete")
-        # Current SDKs expose output_text; older SDKs preserve the newer steps
-        # response as extra JSON fields. Read only final model text, never thoughts.
-        text = getattr(response, "output_text", None)
+        # Read only final model text, never thoughts or tool output.
+        text = packet.get("output_text")
         if not text:
-            packet = response.model_dump()
             steps = [step for step in packet.get("steps", []) if step.get("type") == "model_output"]
             content = steps[-1].get("content", []) if steps else packet.get("outputs", [])
             text = "".join(part.get("text", "") for part in content if part.get("type") == "text")
         if not text:
             raise ValueError("Gemini returned no final structured text")
         return schema.model_validate_json(text)
+
+    def _interaction(self, body, *, timeout_seconds=90):
+        import httpx
+        try:
+            # A single stateless REST request makes 429/4xx visible immediately.
+            # SDK Interactions retries obscured the daily quota response as a timeout.
+            # Credentials stay in a header, never in URLs, UI text or reports.
+            with httpx.Client(timeout=httpx.Timeout(timeout_seconds, connect=10)) as client:
+                response = client.post("https://generativelanguage.googleapis.com/v1beta/interactions",
+                    headers={"x-goog-api-key": self._api_key},
+                    json=body)
+                response.raise_for_status()
+                return response.json()
+        except Exception as error:
+            # Never echo SDK request data, URLs or raw exception text containing keys.
+            raise RuntimeError(gemini_request_error(error, timeout_seconds=timeout_seconds)) from None
 
 
 class LocalReasoner:

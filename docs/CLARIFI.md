@@ -23,6 +23,18 @@ all synthetic rows, and keep its sheet names and headers. Dates must be ISO 8601
 text with timezone offsets, IDs must be text, and formulas are rejected. Company
 due diligence uses supplied evidence; it does not search external registries.
 
+Choose **Combined investigation** to upload all seven tables and run both reviewed
+tools in one approved investigation. A larger downloadable workbook and comparison
+guide are in `outputs/clarifi-demo-01a14a33/`; the combined screen also offers them
+when present. Its 2,493 operational rows are simulated and include historical-name
+references to the Wahi/Coinbase and Good Star/1MDB public cases. The guide separates
+those case facts from invented trading and company connections. This constructed
+fixture is not held-out accuracy evidence. Reproduce the JSON and baseline with
+`python scripts/generate_clarifi_sample.py`. The workbook builder uses the bundled
+Artifact Tool runtime. The Excel reader accepts text-entry apostrophes on ISO
+timestamps and worksheets without declared dimensions, while retaining row,
+column, decompression, formula and timezone validation.
+
 ## How the agent fits
 
 ```mermaid
@@ -168,11 +180,13 @@ outside Git and the container build context.
 ## Run locally
 
 For an AI Studio key, save `GEMINI_API_KEY` in the repository's ignored `.env`
-file and optionally set `CLARIFI_API_MODEL=gemini-3.8-flash`. Select **Gemini API ·
+file and optionally set `CLARIFI_API_MODEL=gemini-3.5-flash-lite`. Select **Gemini API ·
 AI Studio** in the financial UI, check the connection, review the input and approve
 the investigation. No key is entered through the UI or included in reports. The
-adapter uses Google's Interactions API with structured JSON responses and
-`store=False`, and requires `google-genai>=2,<3`. API model availability and quota
+adapter uses Google's Interactions REST API through HTTPX with structured JSON
+responses, `store=False`, credentials in headers and one attempt per request.
+There are no automatic retries of quota failures. Model lookup still uses
+`google-genai>=2,<3`. API model availability and quota
 are checked against the configured project; model lookup alone does not establish
 generation readiness. The configured model is explicit; no automatic fallback is
 used. Local Gemma and Vertex AI remain separate choices.
@@ -180,9 +194,55 @@ used. Local Gemma and Vertex AI remain separate choices.
 Local Gemini API verification accepted the configured credential for model lookup,
 completed a minimal text request and a structured tool plan, but the complete
 financial investigation did not pass: draft and planning requests encountered
-client-side timeouts. The integration is configured; full Gemini investigation
-execution remains unverified. Local Gemma's previously verified investigations
+client-side timeouts. A subsequent direct HTTP check returned 429 with Google's
+explicit free-tier limit of 20 requests per day for the configured model. SDK
+Interactions retries were observed sleeping after 429 responses; the generation
+path now uses one direct request and reports quota and transport failures
+separately. Wait for the project quota reset or upgrade its tier before retrying.
+Gemini 3.5 Flash-Lite subsequently completed the small combined case with real
+planning and evidence-linked drafts (10 findings, both tools, `ai_used=true`).
+It also completed the 2,493-row simulated workbook case with 990 findings and
+validated AI planning and analyst text. The larger draft initially received HTTP
+400 with tightly bounded cloud array cardinality; removing those cloud-only
+claim-count bounds resolved that run. Pydantic limits and the agent's exact
+finding coverage, score and citation checks remain enforced locally. Narratives
+still cover the top 25 findings; all 990 findings remain in the full report.
+Gemini 3.8 full investigation execution remains blocked by its quota. Local Gemma's previously verified investigations
 remain available. No Gemini cloud result is substituted with offline output.
+
+### Model choices and hackathon deployment
+
+The **Google AI model** picker offers Gemini 3.5 and 3.1 Flash-Lite, Gemini 3.8,
+3.7 and 3.6 Flash, earlier 2.5 text models, experimental hosted Gemma 4 models,
+and a custom model ID. The default is the verified `gemini-3.5-flash-lite`.
+Changing the model invalidates the previous approval and results. The system never
+silently switches models after a quota or validation failure. Each completed
+investigation normally uses two requests; model lookup checks do not verify
+generation readiness. Quotas are project-specific and are not hardcoded in the UI.
+
+Hosted Gemma 4 26B model lookup passed, but the structured planning test timed out;
+Gemma 4 31B has not been verified end to end. These candidates are labeled
+experimental. Local Gemma 3 via Ollama remains a separately verified path. Earlier
+2.5 models may be unavailable to newer projects even if the dashboard lists them.
+
+The dashboard's Live API rows apply to persistent sessions, not to the structured
+Interactions calls used here. Their unlimited cells do not establish unlimited
+request capacity, tokens or free use for this agent. Live audio, TTS, image,
+embedding and music models are deliberately excluded from the investigation picker.
+See [Google's supported Interactions models](https://ai.google.dev/gemini-api/docs/interactions-overview)
+and [rate-limit documentation](https://ai.google.dev/gemini-api/docs/rate-limits).
+
+Gemini/Gemma reasoning covers the model-family portion of the supplied hackathon
+requirement. The prototype still needs actual Cloud Run or Firebase deployment;
+running on localhost is not a deployed submission. The Cloud Run API deployment
+script accepts either `CLARIFI_MODE=vertex` (existing default, service-account ADC)
+or `CLARIFI_MODE=gemini` (Gemini or hosted Gemma API, Secret Manager key reference).
+For API mode, set `CLARIFI_API_KEY_SECRET=YOUR_EXISTING_SECRET:VERSION` and an
+explicit `CLARIFI_API_MODEL` such as `gemini-3.5-flash-lite`. The runtime service
+account needs access to that secret version and the private evidence bucket.
+The script deploys a private investigation API; the Streamlit UI remains local.
+Model availability and quota for Vertex AI must be verified separately. Cloud Run
+deployment and GCP IAM have not been executed or verified in this workspace.
 
 The opt-in synthetic Gemini check is:
 

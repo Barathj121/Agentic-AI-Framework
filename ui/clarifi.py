@@ -14,6 +14,7 @@ import streamlit as st
 CAPABILITIES = {
     "Insider trading indicators": "insider_trading",
     "Shell-company networks": "shell_companies",
+    "Combined investigation": "combined",
 }
 LABELS = {
     "employees": "Employees", "accounts": "Trading accounts", "relationships": "Declared related accounts",
@@ -26,16 +27,60 @@ def input_fingerprint(data, mode, model):
     return hashlib.sha256(json.dumps(packet, sort_keys=True).encode()).hexdigest()
 
 
+def input_error_message(error):
+    """Show field locations and reviewed guidance, never submitted cell values."""
+    from pydantic import ValidationError
+    from workbench.agents.clarifi.ingest import IntakeError, TABLES
+    from workbench.agents.clarifi.schemas import InvestigationInput
+    if isinstance(error, IntakeError):
+        return str(error)
+    if isinstance(error, ValidationError):
+        issues = []
+        guidance = {"missing": "Required value or column is missing.",
+                    "extra_forbidden": "Unexpected column; use the template headers.",
+                    "timezone_aware": "Use a timestamp with a timezone, such as 2022-04-12T16:00:00Z.",
+                    "datetime_from_date_parsing": "Use an ISO timestamp with a timezone, such as 2022-04-12T16:00:00Z.",
+                    "datetime_parsing": "Use an ISO timestamp with a timezone, such as 2022-04-12T16:00:00Z.",
+                    "greater_than": "Use a positive numeric value.",
+                    "string_pattern_mismatch": "Check the template's identifier or currency format."}
+        for issue in error.errors(include_input=False, include_context=False, include_url=False)[:5]:
+            location = issue["loc"]
+            parts = []
+            if location and location[0] in TABLES:
+                table = location[0]
+                parts.append(table)
+                if len(location) > 1 and type(location[1]) is int:
+                    parts.append(f"row {location[1]+2}")
+                fields = InvestigationInput.model_fields[table].annotation.__args__[0].model_fields
+                if len(location) > 2 and location[2] in fields:
+                    parts.append(location[2])
+            elif location == ("case_id",):
+                parts.append("Case reference")
+            explanation = guidance.get(issue["type"], "Check the template's required formats, unique IDs and links between tables.")
+            issues.append((" · ".join(parts) + ": " if parts else "") + explanation)
+        return "The input could not be validated. " + " ".join(issues)
+    return "The input could not be read. Use the selected capability's Excel template or example JSON. Check worksheet names, headers, values rather than formulas, and the 5 MiB upload limit."
+
+
 def input_panel(tool):
     from workbench.agents.clarifi.ingest import TOOL_TABLES, excel_template, read_csv_bytes, read_excel_bytes, sample_input, validate_scope
     from workbench.agents.clarifi.schemas import InvestigationInput
 
     st.write("Bring your records as JSON, CSV tables or an Excel workbook. Use the template to arrange your existing data into the fields ClariFi needs.")
+    sample_directory = Path(__file__).resolve().parents[1] / "outputs/clarifi-demo-01a14a33"
+    sample_workbook = sample_directory / "clarifi-combined-review.xlsx"
+    if tool == "combined" and sample_workbook.is_file():
+        st.info("Try a larger example: 2,493 simulated records inspired by public cases. Includes ordinary activity, review leads and ambiguous identities. Historical names are references; all operational rows are simulated.")
+        st.download_button("Download combined investigation sample", sample_workbook.read_bytes(),
+                           file_name=sample_workbook.name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        guide = sample_directory / "README.md"
+        if guide.is_file():
+            st.download_button("Download sample guide & baseline results", guide.read_text(), file_name="clarifi-sample-guide.md", mime="text/markdown")
     with st.expander("Download the Excel format & see what to provide"):
         st.write("One worksheet per table. The template contains synthetic examples: replace every example row with your own records before uploading. Keep the worksheet names and column headers unchanged.")
-        if tool == "insider_trading":
+        if tool in {"insider_trading", "combined"}:
             st.write("Required: employees, trading accounts and trades. Add declared related accounts for family-account checks, issuer access and public event dates for stronger context. Initials alone are a lead for identity review.")
-        else:
+        if tool in {"shell_companies", "combined"}:
             st.write("Required: company records and payments. Include registration addresses, bank accounts and documented ownership where available. Add payment dates, amounts, currencies and business purposes to help explain connections.")
         st.download_button("Download Excel template", excel_template(tool), file_name=f"clarifi-{tool}-template.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key=f"clarifi_excel_template_{tool}")
@@ -66,7 +111,9 @@ def input_panel(tool):
             case_id = st.text_input("Case reference", value=f"review-{tool}", key=f"clarifi_case_{tool}")
             tables = {}
             total = 0
-            required = {"employees", "accounts", "trades"} if tool == "insider_trading" else {"entities", "payments"}
+            required = ({"employees", "accounts", "trades"} if tool == "insider_trading" else
+                        {"entities", "payments"} if tool == "shell_companies" else
+                        {"employees", "accounts", "trades", "entities", "payments"})
             columns = st.columns(2)
             for index, table in enumerate(TOOL_TABLES[tool]):
                 with columns[index % 2]:
@@ -84,8 +131,8 @@ def input_panel(tool):
             with st.expander("CSV columns and mappings"):
                 st.write("Column names must match the example JSON. Use ACME|OTHER for access_issuers, true/false for precleared, and timestamps with a UTC offset. Keep account, employee and payment IDs consistent across tables.")
                 st.json(sample_input(tool).model_dump(mode="json"), expanded=False)
-    except Exception:
-        st.error("The input could not be validated. Check worksheet names, required columns, unique IDs, references, currency codes, positive amounts and timestamps with timezone offsets. Use the Excel template or example JSON as the input contract; formulas are not accepted.")
+    except Exception as error:
+        st.error(input_error_message(error))
     if data:
         counts = {LABELS[table]: len(getattr(data, table)) for table in TOOL_TABLES[tool] if getattr(data, table)}
         st.success("Ready to investigate · " + " · ".join(f"{count} {label.lower()}" for label, count in counts.items()))
@@ -123,10 +170,19 @@ def model_panel():
             else:
                 st.warning("Model is not ready. Start Ollama and download the selected model before running.")
     elif mode == "gemini":
-        from workbench.agents.clarifi.models import GeminiAPIReasoner, gemini_api_config
+        from workbench.agents.clarifi.models import API_MODELS, GeminiAPIReasoner, gemini_api_config
         config = gemini_api_config()
-        model = st.text_input("Gemini API model ID", value=config["model"], key="clarifi_api_model")
-        st.caption("Uses the Gemini key configured on this machine. Planning and evidence-linked drafts are sent to Google's Gemini API.")
+        options = list(API_MODELS)
+        if config["model"] not in options:
+            options.append(config["model"])
+        custom = "Custom model ID"
+        selected = st.selectbox("Google AI model", options + [custom], index=options.index(config["model"]),
+                                format_func=lambda key: API_MODELS.get(key, {}).get("label", key), key="clarifi_google_model")
+        model = st.text_input("Gemini API model ID", value=config["model"], key="clarifi_api_model") if selected == custom else selected
+        st.caption(API_MODELS.get(model, {}).get("description", "Custom model: verify compatibility and project access."))
+        st.caption("Uses the key configured on this machine for Gemini or hosted Gemma. Planning and evidence-linked drafts are sent to Google's API.")
+        st.caption("Each completed investigation normally uses two model requests: planning and the analyst draft. Quotas depend on your project. Switching models requires a new investigation approval.")
+        st.caption("Live/audio, image and embedding models are not investigation model choices. Offline rules demo calls no AI model.")
         if config["key"]:
             st.caption("API key configured locally · value hidden")
         else:
@@ -202,7 +258,7 @@ def render_results(bundle, key="current"):
 
     queue, evidence, narrative, execution = st.tabs(["Review queue", "Connections & evidence", "Analyst draft", "Execution & export"])
     with queue:
-        frame = pd.DataFrame([{"Finding": f["finding_id"], "Subject": f["subject_id"], "Score": f["score"],
+        frame = pd.DataFrame([{"Finding": f["finding_id"], "Capability": f["capability"].replace("_", " ").title(), "Subject": f["subject_id"], "Score": f["score"],
                                "Disposition": f["disposition"].replace("_", " ").title(),
                                "Signals": ", ".join(s["name"].replace("_", " ") for s in f["signals"]),
                                "Anomaly percentile": f["anomaly_percentile"]} for f in findings])
@@ -278,7 +334,9 @@ def financial_page(service):
     st.write("Choose a capability, bring your data, and let the agent prepare an evidence-linked investigation.")
     selected = st.radio("Choose your capability", list(CAPABILITIES), horizontal=True, key="clarifi_capability")
     tool = CAPABILITIES[selected]
-    if tool == "insider_trading":
+    if tool == "combined":
+        st.write("One workbook, two investigations. Upload all seven evidence worksheets to review employee trading and company payment networks in the same run.")
+    elif tool == "insider_trading":
         st.write("Match employees and declared related accounts to trades and public market events. Ambiguous names and initials stay in identity review.")
     else:
         st.write("Trace chronological payment cycles and shared company records, while keeping documented treasury activity in context.")
@@ -311,7 +369,7 @@ def financial_page(service):
             from workbench.llm import LLMError
             if isinstance(error, LLMError):
                 st.error(str(error))
-            elif isinstance(error, RuntimeError) and str(error).startswith("Gemini API request failed (HTTP "):
+            elif isinstance(error, RuntimeError) and str(error).startswith(("Gemini API request failed (HTTP ", "Gemini request ", "Gemini could not be reached.")):
                 st.error(str(error))
             else:
                 st.error("The investigation did not complete. Check model readiness, configuration and input scope. No new result was saved.")

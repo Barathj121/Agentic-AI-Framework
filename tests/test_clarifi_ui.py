@@ -46,13 +46,25 @@ def test_gemini_api_selection_uses_hidden_server_configuration(financial_ui, mon
     app = open_ui()
     next(item for item in app.selectbox if item.label == "Reasoning model").set_value("Gemini API · AI Studio").run()
     assert not app.exception
-    assert next(item for item in app.text_input if item.label == "Gemini API model ID").value == "gemini-3.8-flash"
+    assert next(item for item in app.selectbox if item.label == "Google AI model").value == "gemini-3.8-flash"
     assert any(item.label == "Check Gemini API" for item in app.button)
     assert not any("fixture-private-key" in item.value for item in list(app.caption) + list(app.markdown) + list(app.text))
     assert next(button for button in app.button if button.label == "Run Investigation").disabled
 
 
-@pytest.mark.parametrize("capability", ["Insider trading indicators", "Shell-company networks"])
+def test_google_model_change_clears_approval_and_old_results(financial_ui):
+    app = open_ui()
+    next(item for item in app.selectbox if item.label == "Reasoning model").set_value("Gemini API · AI Studio").run()
+    app.checkbox[0].check().run()
+    assert not next(button for button in app.button if button.label == "Run Investigation").disabled
+    picker = next(item for item in app.selectbox if item.label == "Google AI model")
+    picker.set_value("gemini-3.1-flash-lite" if picker.value != "gemini-3.1-flash-lite" else "gemini-3.5-flash-lite").run()
+    assert not app.exception
+    assert next(button for button in app.button if button.label == "Run Investigation").disabled
+    assert not app.metric
+
+
+@pytest.mark.parametrize("capability", ["Insider trading indicators", "Shell-company networks", "Combined investigation"])
 def test_both_capabilities_run_render_and_save_reports(financial_ui, capability):
     app = open_ui()
     next(item for item in app.radio if item.label == "Choose your capability").set_value(capability).run()
@@ -66,8 +78,9 @@ def test_both_capabilities_run_render_and_save_reports(financial_ui, capability)
     assert len(files) == 1
     bundle = json.loads(files[0].read_text())
     assert not bundle["report"]["provenance"]["ai_used"]
-    expected = "insider_trading" if capability.startswith("Insider") else "shell_companies"
-    assert {f["capability"] for f in bundle["report"]["findings"]} == {expected}
+    expected = ({"insider_trading", "shell_companies"} if capability.startswith("Combined") else
+                {"insider_trading"} if capability.startswith("Insider") else {"shell_companies"})
+    assert {f["capability"] for f in bundle["report"]["findings"]} == expected
     # Reopening is possible after a fresh app session; no original CSV workspace required.
     reopened = open_ui()
     next(button for button in reopened.button if button.label == "Open financial report").click().run()
@@ -143,7 +156,7 @@ def test_cyclic_payment_chart_retains_directions_and_evidence():
     assert any("P03" in trace.text[0] for trace in chart.data if trace.mode == "lines")
 
 
-@pytest.mark.parametrize("tool", ["insider_trading", "shell_companies"])
+@pytest.mark.parametrize("tool", ["insider_trading", "shell_companies", "combined"])
 def test_excel_template_round_trip_preserves_investigation(tool):
     from workbench.agents.clarifi.ingest import excel_template, read_excel_bytes
     from workbench.agents.clarifi.schemas import InvestigationInput
@@ -168,3 +181,46 @@ def test_excel_rejects_formulas_and_wrong_capability():
     workbook.close()
     with pytest.raises(ValueError, match="formulas"):
         read_excel_bytes(output.getvalue(), "shell_companies")
+
+
+def test_delivered_combined_workbook_matches_baseline():
+    from workbench.agents.clarifi.ingest import read_excel_bytes
+    from workbench.agents.clarifi.schemas import InvestigationInput
+    directory = Path(__file__).resolve().parents[1] / "outputs/clarifi-demo-01a14a33"
+    content = (directory / "clarifi-combined-review.xlsx").read_bytes()
+    data = validate_scope(InvestigationInput.model_validate({"case_id": "workbook-check", **read_excel_bytes(content, "combined")}), "combined")
+    assert len(data.employees) == 120 and len(data.trades) == 900 and len(data.payments) == 1200
+    report = ClariFiAgent(mode="rules").run(data, approved=True)
+    baseline = json.loads((directory / "baseline-report.json").read_text())
+    assert report["findings"] == baseline["findings"]
+    assert {f["capability"] for f in report["findings"]} == {"insider_trading", "shell_companies"}
+
+
+@pytest.mark.parametrize("tool", ["insider_trading", "shell_companies"])
+def test_combined_workbook_in_single_mode_gives_actionable_guidance(tool):
+    from workbench.agents.clarifi.ingest import IntakeError, excel_template, read_excel_bytes
+    from ui.clarifi import input_error_message
+    with pytest.raises(IntakeError) as error:
+        read_excel_bytes(excel_template("combined"), tool)
+    message = input_error_message(error.value)
+    assert "Select Combined investigation" in message
+    assert "No spreadsheet edits are needed" in message
+
+
+def test_input_validation_identifies_row_and_field_without_cell_values():
+    from pydantic import ValidationError
+    from workbench.agents.clarifi.schemas import InvestigationInput
+    from ui.clarifi import input_error_message
+    data = sample_input("insider_trading").model_dump(mode="json")
+    data["trades"][0]["occurred_at"] = "fixture-sensitive-cell-value"
+    with pytest.raises(ValidationError) as error:
+        InvestigationInput.model_validate(data)
+    message = input_error_message(error.value)
+    assert "trades · row 2 · occurred_at" in message
+    assert "timezone" in message
+    assert "fixture-sensitive-cell-value" not in message
+
+
+def test_unknown_reader_errors_do_not_echo_source_or_credentials():
+    from ui.clarifi import input_error_message
+    assert "fixture-secret" not in input_error_message(RuntimeError("fixture-secret"))

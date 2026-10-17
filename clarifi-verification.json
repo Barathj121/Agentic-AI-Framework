@@ -1,16 +1,16 @@
 {
-  "recorded_at": "2026-10-17T17:09:46.388807+00:00",
+  "recorded_at": "2026-10-17T19:13:09.402515+00:00",
   "branch": "feature/clarifi-financial-agents",
   "base_commit": "e51f326d0adb6f4946e3ef7f171e50b6a56129fc",
   "tests": {
-    "tests": 222,
+    "tests": 243,
     "failures": 0,
     "errors": 0,
     "skipped": 15,
-    "passed": 207
+    "passed": 228
   },
   "final_agent_focused_suite": {
-    "cases_in_full_suite": 52,
+    "cases_in_full_suite": 73,
     "failed": 0
   },
   "runtime": {
@@ -149,12 +149,42 @@
   },
   "setup_note": "Ollama installed with Homebrew dependencies; python3 default restored to Python 3.13.1 and ripgrep restored after automatic package cleanup.",
   "gemini_api_verification": {
-    "model": "gemini-3.8-flash",
+    "model": "gemini-3.5-flash-lite",
     "credential_storage": "ignored local .env, permissions 0600; not included in Git or reports",
     "model_lookup": "passed",
     "minimal_text_generation": "passed",
     "structured_tool_plan": "passed",
-    "full_investigation": "failed - client-side timeouts during draft and planning requests; no completed Gemini financial report",
-    "no_fallback": true
+    "full_investigation": "COMPLETED for small and large combined simulated cases",
+    "no_fallback": true,
+    "generation_transport": "single stateless Interactions REST request through HTTPX; no automatic quota retry",
+    "quota_diagnostic": "Google reports 20 requests per day for gemini-3.8-flash on Free Tier; model lookup HTTP 200; generation HTTP 429",
+    "error_handling": "timeouts, connectivity, quota and authentication failures distinguished without exposing SDK text or credentials",
+    "verified_combined": {
+      "investigation_id": "685632fd777f43df91c9f82e2c05797a",
+      "input_rows": 2493,
+      "findings": 990,
+      "ai_used": true,
+      "planning": "validated",
+      "analyst_draft": "validated"
+    },
+    "model_catalog": "Nine explicit Google text-model candidates plus custom ID; hosted Gemma entries labeled experimental",
+    "gemma_api_probe": "gemma-4-26b-a4b-it model lookup passed; structured planning timed out; no completed report",
+    "cloud_run_script": "Vertex and Gemini API branches passed syntax and mock-gcloud execution; actual deployment remains unverified"
+  },
+  "combined_workbook_verification": {
+    "status": "COMPLETED",
+    "evidence_rows": 2493,
+    "trades": 900,
+    "payments": 1200,
+    "findings": 990,
+    "analyst_review": 39,
+    "identity_review": 10,
+    "reasoning_provider": "rules_only",
+    "live_browser_upload_verified": true,
+    "export_matches_baseline_findings": true,
+    "sha256": "a1b01a8c10e1ee33bcdbb9ce6e9b9a4b82c7d96a0c9a394ce47b099532703a37",
+    "data_status": "Simulated operational records with separately cited public-case references; not historical ledgers or held-out accuracy data",
+    "upload_validation": "Verified again in live browser: original workbook accepted in Combined mode; single-capability mismatch now gives explicit guidance",
+    "validation_errors": "Safe worksheet, row and field guidance without submitted values"
   }
 }
