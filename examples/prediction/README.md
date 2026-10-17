@@ -14,6 +14,12 @@ From the repository root, with the Python environment and sandbox image ready:
 
 The explicit flag approves the reviewed example program for sandbox execution. The command reports the new workspace, execution evidence and registered outputs. Open that workspace in the application's Workspace history, then Results. Inspect the saved program, notebook, model, metrics and predictions alongside the dashboard.
 
+## Predict a new alert
+
+In the completed prediction workspace, open **Results → Predict a new alert**. Enter the ten feature values (or start with a preset), then click **Predict this alert**. Each submission loads the saved trained model in a fresh Docker sandbox and returns a new score, the saved threshold and a review decision. It does not retrain the model or call Ollama. The last scored result identifies its submitted inputs and scoring time; editing the form requires another click to get a new prediction. This is on-demand inference, not a connection to a live transaction feed.
+
+The earlier **Example Predictions** table contains five saved inference examples. `escalation_score` and `review_recommended` are their predictions. `outcome = UNKNOWN` means those examples have no observed investigation outcome to compare against. It does not mean the model failed to predict. Scores concern the synthetic escalation target and are not calibrated probabilities of crime.
+
 To rebuild only the synthetic input dataset, without training a model:
 
 ```powershell

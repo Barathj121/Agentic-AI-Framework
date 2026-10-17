@@ -54,6 +54,8 @@ def test_initial_ui_and_empty_history_do_not_require_services(app_environment):
     app_path = Path(__file__).resolve().parents[1] / "app.py"
     app = AppTest.from_file(str(app_path), default_timeout=20).run()
     assert not app.exception
+    assert app.header[0].value == "Agentic Data & Application Workbench"
+    next(item for item in app.button if item.label == "Open Data Workbench").click().run()
     assert app.header[0].value == "Start with your data"
     assert any(item.label == "Create & profile workspace" for item in app.button)
     app.sidebar.radio[0].set_value("Workspace history").run()

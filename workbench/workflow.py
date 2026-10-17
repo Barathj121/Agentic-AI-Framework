@@ -1,23 +1,20 @@
-"""Durable, human-approved LangGraph orchestration of real sandbox computation."""
+"""Durable, human-approved Google ADK orchestration of sandbox computation."""
 
 from __future__ import annotations
 
 import json
 import os
 import re
+import sqlite3
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypedDict
 from uuid import uuid4
 
 from filelock import FileLock, Timeout
-from langgraph.checkpoint.sqlite import SqliteSaver
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
-from langsmith import tracing_context
 from packaging.requirements import InvalidRequirement, Requirement
 
 from workbench.artifacts import validate_and_register
@@ -97,10 +94,11 @@ def _memory_bytes(value: str) -> int | None:
 
 class Workflow:
     def __init__(self, settings: Settings, llm=None, sandbox=None):
-        # Ambient LangSmith settings must not export private profiles, prompts,
+        # Ambient telemetry settings must not export private profiles, prompts,
         # generated source or results from this explicitly local-only workflow.
         os.environ["LANGSMITH_TRACING"] = "false"
         os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        os.environ["OTEL_SDK_DISABLED"] = "true"
         self.settings = settings
         self.manager = WorkspaceManager(settings.workspace_root)
         self.llm = llm if llm is not None else create_llm(settings)
@@ -130,63 +128,44 @@ class Workflow:
         self.manager.write(workspace, "metadata/state.json", value)
         return {**updates, "status": status}
 
-    @contextmanager
-    def _graph(self, workspace: Path):
-        with tracing_context(enabled=False), SqliteSaver.from_conn_string(str(safe_path(workspace, "metadata/checkpoints.sqlite"))) as saver:
-            graph = StateGraph(GraphState)
-            nodes = {
-                "understand": self._understand,
-                "explore": self._explore,
-                "proposals": self._proposals,
-                "feasibility": self._feasibility,
-                "approval": self._approval,
-                "generate": self._generate,
-                "execute": self._execute,
-                "validate": self._validate,
-                "repair": self._repair,
-                "complete": self._complete,
-                "failed": self._failed,
-            }
-            for name, function in nodes.items():
-                # Bind each function separately; no late-bound loop closure.
-                graph.add_node(name, lambda state, fn=function: fn(workspace, state))
-            graph.add_edge(START, "understand")
-            graph.add_edge("understand", "explore")
-            graph.add_edge("explore", "proposals")
-            graph.add_edge("proposals", "feasibility")
-            graph.add_edge("feasibility", "approval")
-            graph.add_conditional_edges("approval", lambda s: "generate" if s.get("decision") == "approve" else END)
-            graph.add_conditional_edges("generate", self._after_build)
-            graph.add_conditional_edges("execute", self._after_execute)
-            graph.add_conditional_edges("validate", self._after_validate)
-            graph.add_conditional_edges("repair", self._after_build)
-            graph.add_edge("complete", END)
-            graph.add_edge("failed", END)
-            yield graph.compile(checkpointer=saver)
+    def _checkpoint(self, workspace: Path, state: dict, stage: str) -> None:
+        """Keep local stage history and atomic state, including old workspaces.
 
-    def _config(self, workspace: Path) -> dict:
-        run = self.manager.read(workspace, "metadata/workflow.json", {})
-        if not run.get("run_id"):
-            raise ValueError("This workspace has no proposal workflow to resume")
-        return {"configurable": {"thread_id": f"{workspace.name}:{run['run_id']}"}, "recursion_limit": 40}
+        This is an ADK stage journal, not a LangGraph checkpointer. The separate
+        table name leaves any historical LangGraph checkpoints intact.
+        """
+        self.manager.write(workspace, "metadata/state.json", state)
+        with closing(sqlite3.connect(safe_path(workspace, "metadata/checkpoints.sqlite"))) as connection:
+            with connection:
+                connection.execute("CREATE TABLE IF NOT EXISTS adk_stage_history (id INTEGER PRIMARY KEY, run_id TEXT, stage TEXT, recorded_at TEXT, state_json TEXT)")
+                connection.execute("INSERT INTO adk_stage_history (run_id, stage, recorded_at, state_json) VALUES (?, ?, ?, ?)",
+                                   (state.get("run_id"), stage, _now(), _json(state)))
 
-    def _invoke(self, workspace: Path, graph, value: dict | Command) -> dict:
-        config = self._config(workspace)
+    @staticmethod
+    def _record_adk_event(workspace: Path, event: dict) -> None:
+        with safe_path(workspace, "logs/adk-workflow.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(_json(event) + "\n")
+
+    def _invoke(self, workspace: Path, value: dict, phase: str) -> dict:
+        from workbench.adk_agents import run_sync, run_workflow
+        if hasattr(self.llm, "bind_workspace"):
+            self.llm.bind_workspace(workspace)
         try:
-            result = graph.invoke(value, config)
-            result = {key: val for key, val in result.items() if key != "__interrupt__"}
+            result = run_sync(lambda: run_workflow(self, workspace, value, phase))
             if result.get("status") != "COMPLETED":
                 self._check_cancel(workspace)
             self.manager.write(workspace, "metadata/state.json", result)
             return result
         except Exception as exc:
             status = "CANCELLED" if isinstance(exc, WorkflowCancelled) else "FAILED"
-            state = dict(graph.get_state(config).values)
+            state = self.manager.read(workspace, "metadata/state.json", value)
             error = f"{type(exc).__name__}: {exc}"[:4000]
             state.update(self._stage(workspace, state, status, error, error=error))
-            # Keep terminal outcome in the actual SQLite state as well as display metadata.
-            graph.update_state(config, {"status": status, "error": error})
+            self._checkpoint(workspace, state, status.lower())
             return state
+        finally:
+            if hasattr(self.llm, "bind_workspace"):
+                self.llm.bind_workspace(None)
 
     def propose(self, workspace: Path, *, reset_cancellation: bool = True) -> dict:
         workspace = self._workspace(workspace)
@@ -208,7 +187,7 @@ class Workflow:
                 if not profile or not profile.get("columns"):
                     raise ValueError("Ingest and profile a CSV before requesting proposals")
                 run_id = uuid4().hex
-                self.manager.write(workspace, "metadata/workflow.json", {"run_id": run_id, "started_at": _now()})
+                self.manager.write(workspace, "metadata/workflow.json", {"run_id": run_id, "started_at": _now(), "agent_framework": "google_adk"})
                 initial: GraphState = {
                     "workspace_id": workspace.name,
                     "run_id": run_id,
@@ -219,8 +198,8 @@ class Workflow:
                     "history": [],
                     "error": None,
                 }
-                with self._graph(workspace) as graph:
-                    return self._invoke(workspace, graph, initial)
+                self._checkpoint(workspace, initial, "start")
+                return self._invoke(workspace, initial, "understand")
         except Timeout as exc:
             raise RuntimeError("A workflow is already running for this workspace") from exc
 
@@ -229,31 +208,34 @@ class Workflow:
         if len(instructions) > 4000:
             raise ValueError("Additional instructions are limited to 4,000 characters")
         try:
-            with self._lock(workspace), self._graph(workspace) as graph:
+            with self._lock(workspace):
                 self._check_cancel(workspace)
-                snapshot = graph.get_state(self._config(workspace))
-                state = snapshot.values
-                if state.get("status") != "AWAITING_APPROVAL" or "approval" not in snapshot.next:
+                state = self.manager.read(workspace, "metadata/state.json", {})
+                if state.get("status") != "AWAITING_APPROVAL":
                     raise ValueError("The workflow is not awaiting approval")
                 proposal = next((p for p in state.get("proposals", []) if p["proposal_id"] == proposal_id), None)
                 if proposal is None:
                     raise ValueError("Unknown proposal ID")
                 if proposal["feasibility"] == "NOT_FEASIBLE":
                     raise ValueError("A NOT_FEASIBLE proposal cannot be approved")
-                return self._invoke(workspace, graph, Command(resume={
+                state.update(self._approval(workspace, state, {
                     "action": "approve", "proposal_id": proposal_id, "instructions": instructions,
                 }))
+                self._checkpoint(workspace, state, "approval")
+                return self._invoke(workspace, state, "generate")
         except Timeout as exc:
             raise RuntimeError("A workflow is already running for this workspace") from exc
 
     def reject(self, workspace: Path, reason: str = "") -> dict:
         workspace = self._workspace(workspace)
         try:
-            with self._lock(workspace), self._graph(workspace) as graph:
-                snapshot = graph.get_state(self._config(workspace))
-                if snapshot.values.get("status") != "AWAITING_APPROVAL" or "approval" not in snapshot.next:
+            with self._lock(workspace):
+                state = self.manager.read(workspace, "metadata/state.json", {})
+                if state.get("status") != "AWAITING_APPROVAL":
                     raise ValueError("The workflow is not awaiting approval")
-                return self._invoke(workspace, graph, Command(resume={"action": "reject", "reason": reason[:4000]}))
+                state.update(self._approval(workspace, state, {"action": "reject", "reason": reason[:4000]}))
+                self._checkpoint(workspace, state, "rejection")
+                return state
         except Timeout as exc:
             raise RuntimeError("A workflow is already running for this workspace") from exc
 
@@ -273,10 +255,8 @@ class Workflow:
                     if state.get("status") == "COMPLETED":
                         return
                     state.update(self._stage(workspace, state, "CANCELLED", "Cancellation requested by user"))
-                    run = self.manager.read(workspace, "metadata/workflow.json", {})
-                    if run:
-                        with self._graph(workspace) as graph:
-                            graph.update_state(self._config(workspace), {"status": "CANCELLED", "decision": "cancel"})
+                    state["decision"] = "cancel"
+                    self._checkpoint(workspace, state, "cancellation")
             except Timeout:
                 # The running worker checks the flag between every stage and after
                 # local inference. Sandbox.cancel terminates an active container.
@@ -315,15 +295,39 @@ class Workflow:
 
     def _understand(self, workspace: Path, state: GraphState) -> dict:
         self._stage(workspace, state, "UNDERSTANDING", "Understanding the problem and dataset profile")
-        value = self.llm.structured(Understanding, UNDERSTANDING_SYSTEM, _json({
+        source_columns = [column["name"] for column in state["profile"]["columns"]]
+        columns = set(source_columns)
+        payload = {
             "problem": state["problem"], "profile": self._bounded_profile(state["profile"]),
-        }))
-        self._check_cancel(workspace)
-        value = Understanding.model_validate(value)
-        columns = {c["name"] for c in state["profile"]["columns"]}
-        missing = sorted(set(value.relevant_columns) - columns)
-        if missing:
-            raise ValueError("Data understanding referenced columns absent from the actual schema: " + ", ".join(missing))
+            "available_source_columns": source_columns,
+        }
+        for attempt in range(self.settings.max_repair_attempts + 1):
+            self._check_cancel(workspace)
+            value = self.llm.structured(Understanding, UNDERSTANDING_SYSTEM, _json(payload))
+            self._check_cancel(workspace)
+            value = Understanding.model_validate(value)
+            missing = sorted(set(value.relevant_columns) - columns)
+            if not missing:
+                break
+            error = "Data understanding referenced columns absent from the actual schema: " + ", ".join(missing)
+            retry = attempt < self.settings.max_repair_attempts
+            self.manager.event(
+                workspace, "UNDERSTANDING", "Rejected data understanding with unknown source columns",
+                attempt=attempt, unknown_source_columns=missing, allowed_source_columns=source_columns,
+                rejected_response=value.model_dump(mode="json"), will_retry=retry,
+            )
+            if not retry:
+                raise ValueError(error)
+            payload["semantic_repair"] = {
+                "error": error,
+                "allowed_source_columns": source_columns,
+                "previous_response": value.model_dump(mode="json"),
+                "instruction": (
+                    "Return a corrected complete Understanding object. relevant_columns may contain only "
+                    "exact existing source names above. Describe requested derived outputs or missing data "
+                    "in summary, assumptions or limitations; do not change the business objective."
+                ),
+            }
         self.manager.write(workspace, "metadata/understanding.json", value.model_dump(mode="json"))
         return {"understanding": value.model_dump(mode="json"), "status": "UNDERSTANDING"}
 
@@ -360,15 +364,56 @@ class Workflow:
         exploration = state.get("exploration", [])
         # Keep each query's evidence bounded, preserving valid JSON throughout.
         evidence = [{**q, "rows": q.get("rows", [])[:5]} for q in exploration]
-        value = self.llm.structured(ProposalSet, PROPOSALS_SYSTEM, _json({
+        source_columns = [column["name"] for column in state["profile"]["columns"]]
+        columns = set(source_columns)
+        payload = {
             "problem": state["problem"],
             "profile": self._bounded_profile(state["profile"]),
+            "available_source_columns": source_columns,
             "understanding": state["understanding"],
             "exploration_evidence": evidence,
             "capabilities": self._capabilities(),
-        }))
+        }
+        for attempt in range(self.settings.max_repair_attempts + 1):
+            self._check_cancel(workspace)
+            value = self.llm.structured(ProposalSet, PROPOSALS_SYSTEM, _json(payload))
+            self._check_cancel(workspace)
+            value = ProposalSet.model_validate(value)
+            issues = []
+            for proposal in value.proposals:
+                missing = set(proposal.required_columns) - columns
+                output_columns = {column for output in proposal.expected_outputs for column in output.required_columns}
+                overlap = sorted(missing & output_columns)
+                if overlap:
+                    issues.append({"proposal_id": proposal.proposal_id,
+                                   "unknown_source_columns": sorted(missing),
+                                   "declared_output_columns_used_as_inputs": overlap})
+            if not issues:
+                break
+            retry = attempt < self.settings.max_repair_attempts
+            self.manager.event(
+                workspace, "GENERATING_PROPOSALS", "Proposal source inputs include absent declared output columns",
+                attempt=attempt, source_column_issues=issues, allowed_source_columns=source_columns,
+                rejected_response=value.model_dump(mode="json"), will_retry=retry,
+            )
+            if not retry:
+                # Keep the model's response intact. Existing feasibility checks
+                # mark unresolved missing inputs NOT_FEASIBLE and block approval.
+                break
+            payload["semantic_repair"] = {
+                "error": "Absent source inputs are also declared as produced output columns.",
+                "issues": issues,
+                "allowed_source_columns": source_columns,
+                "previous_response": value.model_dump(mode="json"),
+                "instruction": (
+                    "Return a corrected complete ProposalSet preserving the objective and output contracts. "
+                    "For computed output columns, identify the actual existing source columns needed to derive "
+                    "them in proposal.required_columns; retain the produced columns in expected_outputs.required_columns. "
+                    "Do not remove a genuine input dependency to claim feasibility. If the value needs unavailable "
+                    "source data, retain that dependency, explain the gap, and mark the proposal NOT_FEASIBLE."
+                ),
+            }
         self._check_cancel(workspace)
-        value = ProposalSet.model_validate(value)
         return {"proposals": [p.model_dump(mode="json") for p in value.proposals], "status": "GENERATING_PROPOSALS"}
 
     def _output_issue(self, workspace: Path, output) -> str | None:
@@ -442,9 +487,7 @@ class Workflow:
         self.manager.write(workspace, "metadata/feasibility.json", {"checks": checks, "capabilities": self._capabilities()})
         return self._stage(workspace, state, "AWAITING_APPROVAL", "Proposals saved; execution is paused until explicit approval", proposals=proposals)
 
-    def _approval(self, workspace: Path, state: GraphState) -> dict:
-        # No side effects before interrupt: this node is replayed when resumed.
-        response = interrupt({"kind": "solution_approval", "workspace_id": workspace.name, "proposals": state["proposals"]})
+    def _approval(self, workspace: Path, state: GraphState, response: dict) -> dict:
         if not isinstance(response, dict) or response.get("action") not in {"approve", "reject", "cancel"}:
             raise ValueError("Invalid approval response")
         if response["action"] != "approve":

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 def verify_smoke_result(service, workspace: Path) -> dict:
     """Check actual smoke rows and retain both generic and independent evidence.
 
-    This is a post-run benchmark, not a replacement for the LangGraph history.
+    This is a post-run benchmark, not a replacement for the ADK workflow history.
     It never runs generated code, calls a model, or changes a checkpoint. A
     failed comparison overrides display status so known wrong results cannot
     retain an overall COMPLETED label.

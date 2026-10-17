@@ -22,7 +22,7 @@ def provider(tmp_path, bodies, status=200):
         body = bodies[min(len(requests) - 1, len(bodies) - 1)]
         return httpx.Response(status, json=body)
 
-    settings = Settings(workspace_root=tmp_path)
+    settings = Settings(workspace_root=tmp_path, ollama_model="llama3.1:8b")
     client = OllamaClient(settings, client=httpx.Client(transport=httpx.MockTransport(handle)))
     return client, requests
 
@@ -40,6 +40,29 @@ def test_invalid_json_and_schema_repaired_with_bounded_retries(tmp_path):
     assert payload["stream"] is False
     assert "Validation errors" in payload["messages"][1]["content"]
     assert payload["model"] == "llama3.1:8b"
+
+
+@pytest.mark.parametrize("mode", ["json_schema", "json_object"])
+def test_full_schema_is_prompted_once_and_preserved_during_repairs(tmp_path, mode):
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        content = '{"wrong":1}' if len(requests) == 1 else '{"value":7}'
+        return httpx.Response(200, json={"message": {"content": content}})
+
+    client = OllamaClient(Settings(workspace_root=tmp_path, ollama_model="gemma-fixture:4b", llm_structured_mode=mode),
+                          client=httpx.Client(transport=httpx.MockTransport(respond)))
+    assert client.structured(Answer, "Return a count", "Calculate it").value == 7
+    assert len(requests) == 2
+    schema_text = json.dumps(Answer.model_json_schema(), separators=(",", ":"))
+    for request in requests:
+        system = request["messages"][0]["content"]
+        assert system.count("Required JSON schema:") == 1
+        assert system.count(schema_text) == 1
+        assert request["format"] == (Answer.model_json_schema() if mode == "json_schema" else "json")
+    assert requests[0]["messages"][0] == requests[1]["messages"][0]
+    assert '"path": "value"' in requests[1]["messages"][1]["content"]
 
 
 def test_fenced_json_is_validated(tmp_path):
@@ -118,7 +141,7 @@ def test_factory_keeps_ollama_default(tmp_path):
     client = create_llm(Settings(workspace_root=tmp_path))
     try:
         assert isinstance(client, OllamaClient)
-        assert client.model == "llama3.1:8b"
+        assert client.model == "auto"
     finally:
         client.close()
 

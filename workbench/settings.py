@@ -43,9 +43,10 @@ def validate_local_url(value: str, name: str) -> str:
 @dataclass(frozen=True)
 class Settings:
     workspace_root: Path = Path("workspaces")
+    agent_framework: str = "google_adk"
     llm_provider: str = "ollama"
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1:8b"
+    ollama_model: str = "auto"
     llm_base_url: str = "http://localhost:1234/v1"
     llm_model: str = ""
     llm_api_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""), repr=False)
@@ -63,6 +64,8 @@ class Settings:
 
     def __post_init__(self):
         object.__setattr__(self, "workspace_root", Path(self.workspace_root).resolve())
+        if self.agent_framework != "google_adk":
+            raise ValueError("AGENT_FRAMEWORK must be google_adk; LangGraph execution has been replaced")
         if self.llm_provider not in {"ollama", "openai_compatible"}:
             raise ValueError("LLM_PROVIDER must be ollama or openai_compatible")
         if self.llm_structured_mode not in {"json_schema", "json_object"}:

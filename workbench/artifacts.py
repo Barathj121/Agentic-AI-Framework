@@ -215,6 +215,10 @@ def validate_and_register(workspace, build, execution, settings, sandbox) -> dic
                 model_evidence = next((c.get("evidence") for c in checks if c.get("kind") == "model_load" and c.get("target") == relative and c.get("passed")), None)
                 if model_evidence:
                     artifact["metadata"] = model_evidence
+                    # Bind subsequent inference to the exact inspected bytes without
+                    # deserializing executable model formats in the host process.
+                    with safe.open("rb") as model_stream:
+                        artifact["sha256"] = hashlib.file_digest(model_stream, "sha256").hexdigest()
                 artifacts.append(artifact)
             except (OSError, ValueError):
                 continue

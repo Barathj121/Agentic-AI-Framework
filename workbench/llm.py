@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import TypeVar
 
 import httpx
@@ -38,6 +39,26 @@ class _LocalStructuredClient:
             follow_redirects=False,
             timeout=httpx.Timeout(float(settings.llm_timeout_seconds), connect=10.0),
         )
+        self._event_workspace: Path | None = None
+
+    def bind_workspace(self, workspace: Path | None) -> None:
+        """Persist actual ADK reasoning events in the selected local workspace."""
+        self._event_workspace = Path(workspace) if workspace else None
+
+    def _adk_generate(self, schema_name: str, schema: dict, messages: list[dict]):
+        from workbench.adk_agents import structured_turn
+        try:
+            self._resolve_model()
+            raw, finish_reason, events = structured_turn(self, schema_name, schema, messages)
+        except Exception as exc:
+            raise LLMError(self._redact(str(exc))) from None
+        if self._event_workspace:
+            from workbench.workspace import safe_path
+            path = safe_path(self._event_workspace, "logs/adk-reasoning.jsonl")
+            with path.open("a", encoding="utf-8") as handle:
+                for event in events:
+                    handle.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+        return raw, finish_reason
 
     def close(self) -> None:
         self._client.close()
@@ -99,6 +120,10 @@ class _LocalStructuredClient:
     def _model_is_available(self, models: list[str]) -> bool:
         return self.model in models
 
+    def _resolve_model(self) -> str:
+        """Resolve local selectors before ADK captures the model in its trace."""
+        return self.model
+
     def _missing_model(self) -> str:
         return "Load the intended local model and set LLM_MODEL to its exact ID from GET /models."
 
@@ -133,12 +158,15 @@ class _LocalStructuredClient:
         """
         schema = schema_class.model_json_schema()
         schema_text = json.dumps(schema, separators=(",", ":"))
+        # The provider's schema constrains JSON generation; the same schema in
+        # the prompt explains its fields to smaller local models. Include it
+        # once in both modes and preserve it unchanged during bounded repairs.
         system = system + "\nReturn only one complete JSON object matching the supplied schema."
-        if self.settings.llm_structured_mode == "json_object":
-            system += "\nRequired JSON schema:\n" + schema_text
+        system += "\nRequired JSON schema:\n" + schema_text
         reserved_output = self.settings.llm_max_output_tokens
         input_budget = (self.settings.llm_context_tokens - reserved_output) * 4
-        initial_size = len(system) + len(prompt) + (len(schema_text) if self.settings.llm_structured_mode == "json_schema" else 0)
+        # The schema is already counted in system; do not count it twice.
+        initial_size = len(system) + len(prompt)
         if initial_size > input_budget:
             raise LLMError(
                 f"The task needs about {initial_size} input characters; the configured context "
@@ -148,7 +176,7 @@ class _LocalStructuredClient:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
         last_error = ""
         for attempt in range(3):
-            raw, finish_reason = self._generate(schema_class.__name__, schema, messages)
+            raw, finish_reason = self._adk_generate(schema_class.__name__, schema, messages)
             if not isinstance(raw, str):
                 raw = ""
             cleaned = raw.strip()
@@ -160,7 +188,11 @@ class _LocalStructuredClient:
             except ValidationError as exc:
                 # Do not include raw input values or large source files in errors.
                 errors = exc.errors(include_input=False, include_url=False)
-                last_error = self._redact(json.dumps(errors, default=str))[:1000]
+                # Repeated validator ctx text crowds out the actual field and
+                # correction instructions. Keep compact paths and messages.
+                feedback = [{"path": ".".join(str(part) for part in error["loc"]),
+                             "error": error["msg"]} for error in errors[:4]]
+                last_error = self._redact(json.dumps(feedback, default=str))[:1200]
             else:
                 if finish_reason != "length":
                     return value
@@ -189,8 +221,12 @@ class OllamaClient(_LocalStructuredClient):
     def __init__(self, settings: Settings, *, client: httpx.Client | None = None):
         super().__init__(settings, base_url=settings.ollama_base_url, model=settings.ollama_model,
                          provider="ollama", label="Ollama", client=client)
+        self._gemma_inventory: set[str] = set()
+        self._model_sizes: dict[str, int] = {}
 
     def _missing_model(self) -> str:
+        if self.model == "auto":
+            return "No installed Gemma model was found. Run 'ollama list', install a Google Gemma model, and set OLLAMA_MODEL to its exact tag."
         return f"Confirm the model with 'ollama list' and download it with: ollama pull {self.model}"
 
     def _models(self) -> list[str]:
@@ -198,14 +234,60 @@ class OllamaClient(_LocalStructuredClient):
         models = response.get("models")
         if not isinstance(models, list) or any(not isinstance(model, dict) for model in models):
             raise LLMError("Ollama returned an invalid model list")
+        self._gemma_inventory = set()
+        self._model_sizes = {}
+        for item in models:
+            name = item.get("name", item.get("model", ""))
+            if not isinstance(name, str):
+                continue
+            details = item.get("details") or {}
+            if isinstance(details, dict):
+                families = [details.get("family", ""), *(details.get("families") or [])]
+                if any("gemma" in str(family).lower() for family in families):
+                    self._gemma_inventory.add(name)
+            if isinstance(item.get("size"), int) and item["size"] > 0:
+                self._model_sizes[name] = item["size"]
         return [model.get("name", model.get("model", "")) for model in models
                 if isinstance(model.get("name", model.get("model", "")), str)]
 
     def _model_is_available(self, models: list[str]) -> bool:
+        if self.model == "auto":
+            gemma = self._gemma_models(models)
+            if not gemma:
+                return False
+            self.model = gemma[0]
         names = {self.model, self.model + ":latest"} if ":" not in self.model else {self.model}
         return bool(names.intersection(models))
 
+    def _gemma_models(self, models: list[str]) -> list[str]:
+        def size(name):
+            match = re.search(r"(?:[:_-])(\d+(?:\.\d+)?)b(?:$|[-_:])", name, re.I)
+            return (self._model_sizes.get(name, float("inf")), float(match.group(1)) if match else float("inf"), name)
+        return sorted([name for name in models if ("gemma" in name.lower() or name in self._gemma_inventory)
+                       and not re.search(r"(?:[:/-])cloud$", name, re.I)], key=size)
+
+    def _resolve_model(self) -> str:
+        if self.model == "auto" and not self._model_is_available(self._models()):
+            raise LLMError(self._missing_model())
+        return self.model
+
+    def health(self) -> dict:
+        result = super().health()
+        result.update(agent_framework="google_adk", model_adapter="local_base_llm",
+                      gemma_models=self._gemma_models(result.get("models", [])),
+                      tool_calling="not_required: approved tools run deterministically")
+        return result
+
+    def capabilities(self) -> dict:
+        self._resolve_model()
+        result = self._request("POST", "/api/show", {"model": self.model}, timeout=10.0)
+        capabilities = result.get("capabilities", [])
+        return {"model": self.model, "reported_capabilities": capabilities,
+                "native_tools_reported": "tools" in capabilities,
+                "execution_mode": "ADK structured reasoning; deterministic approved tools"}
+
     def _generate(self, schema_name: str, schema: dict, messages: list[dict]) -> tuple[str, str | None]:
+        self._resolve_model()
         response = self._request("POST", "/api/chat", {
             "model": self.model, "messages": messages, "stream": False,
             "format": schema if self.settings.llm_structured_mode == "json_schema" else "json",

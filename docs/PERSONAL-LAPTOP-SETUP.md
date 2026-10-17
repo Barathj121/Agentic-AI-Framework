@@ -1,96 +1,144 @@
-# Run on your personal Windows laptop
+# Run on a personal Windows laptop
 
-**Codex is not required.** The application runs with Python, a local model API and a Docker-compatible Linux container engine. GitHub contains the editable application source and synthetic examples; model weights and the sandbox image are downloaded or built separately.
+Codex is not needed to run or edit this project. Use Python, a local Gemma model through Ollama, and Docker Desktop/WSL2 or Rancher Desktop/Moby. The application remains editable source; only generated analysis runs are sent to the sandbox.
 
-## 1. Install the prerequisites
+## 1. Get the current source and prerequisites
 
-- [Git for Windows](https://git-scm.com/install/windows).
-- [Python 3.11 for Windows](https://www.python.org/downloads/windows/), including the Python launcher. The setup script uses `py -3.11` by default.
-- **One model server:** use your existing [Bionic/LM Studio](https://lmstudio.ai/) model through its local API, or install [Ollama for Windows](https://ollama.com/download/windows). You do not need Ollama if your Bionic API is configured.
-- **One container engine:** [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/) with its **WSL 2 backend and Linux containers**, or [Rancher Desktop](https://docs.rancherdesktop.io/getting-started/installation/) with **Moby/dockerd** selected.
+Install Git if cloning, Python 3.11 or newer, Ollama, and one Linux container engine. Start the engine before building images. The target machine has 32 GB RAM and a CPU; there is no mandatory GPU.
 
-If WSL is missing, open PowerShell **as administrator**, run `wsl --install`, and restart Windows when requested. [Microsoft WSL installation instructions](https://learn.microsoft.com/en-us/windows/wsl/install)
+The upgrade is local until explicitly published. Copy the current source directory, or clone a revision confirmed to contain `workbench/adk_agents.py`, `workbench/migration.py`, `ui/migration.py` and `examples/migration/`. A clone of an older GitHub revision will not acquire unpushed local changes.
 
-Start your chosen container engine and wait until it is ready. Use one engine at a time. If both are installed, the [model and debugging guide](MODELS-AND-DEBUGGING.md#choose-docker-desktop-or-rancher-desktop) explains how to select the correct Docker context.
-
-## 2. Download the source and build the sandbox
-
-Open a **new, ordinary PowerShell window** in the folder where you want the project:
+When the intended revision is available on GitHub:
 
 ```powershell
-git clone https://github.com/barathj121/Agentic-AI-Framework.git
-cd Agentic-AI-Framework
+Set-Location ([Environment]::GetFolderPath('Desktop'))
+git clone https://github.com/barathj121/Agentic-AI-Framework.git Agentic-Workbench
+Set-Location .\Agentic-Workbench
+```
+
+If you copied the folder instead, open PowerShell there. Do not copy another machine's virtual environment or rely on its `local-runtime.json`; setup creates a fresh `.venv`. Copy saved workspaces separately only if you want their local datasets/results.
+
+Check prerequisites:
+
+```powershell
 py -3.11 --version
 docker context ls
 docker info
 docker info --format '{{.OSType}}'
 ```
 
-The Docker operating-system result should be `linux`. If `docker info` fails, start or select the intended engine before continuing. If GitHub requests authentication, sign in to an account with repository access. Once these checks pass, run setup:
+Docker must report `linux`. If its daemon is unavailable, start Docker Desktop with WSL2/Linux containers, or Rancher Desktop with Moby/dockerd. If Windows reports WSL/virtualization requirements, complete the engine's documented installation before continuing.
+
+If `docker` is not on this terminal's PATH, add your installed engine's CLI directory for this session before setup. For Docker Desktop:
+
+```powershell
+$env:Path = "$env:ProgramFiles\Docker\Docker\resources\bin;$env:Path"
+```
+
+For Rancher Desktop instead:
+
+```powershell
+$env:Path = "$env:ProgramFiles\Rancher Desktop\resources\resources\win32\bin;$env:Path"
+```
+
+## 2. Install dependencies and build the sandbox
 
 ```powershell
 .\scripts\setup.ps1 -BuildSandbox
 ```
 
-Setup creates `.venv`, installs Python packages, creates `.env` if absent, generates sample CSVs and builds the sandbox image.
+This creates `.venv`, installs the host dependencies (including Google ADK), preserves an existing `.env`, generates the existing data examples, and builds the reusable analysis image.
 
-If PowerShell blocks the script, allow it for this process only, then repeat setup:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\scripts\setup.ps1 -BuildSandbox
-```
-
-If `py -3.11` cannot find your installed interpreter, use `.\scripts\setup.ps1 -PythonExe "C:\path\to\python.exe" -BuildSandbox`. The override must be Python 3.11 or newer; the development host was tested with Python 3.12.
-
-## 3. Configure one local model
-
-**Existing Bionic/LM Studio model:** In Bionic, open **Settings → Local Model API**, enable the server and copy its base URL. In classic LM Studio, use **Developer → Start server**. Query its models:
+If the default Python launcher does not find your interpreter:
 
 ```powershell
-(Invoke-RestMethod -Uri "http://localhost:1234/v1/models").data | Select-Object id
+.\scripts\setup.ps1 -PythonExe 'C:\path\to\python.exe' -BuildSandbox
 ```
 
-Set these keys in `.env`, replacing existing entries or adding missing ones. Use the displayed URL and exact returned model ID:
-
-```dotenv
-LLM_PROVIDER=openai_compatible
-LLM_BASE_URL=http://localhost:1234/v1
-LLM_MODEL=<exact ID from the command above>
-LLM_STRUCTURED_MODE=json_schema
-LLM_TIMEOUT_SECONDS=600
-```
-
-Load the model with at least the default `8192` context tokens in its server settings. The workbench's context budget does not change the server's loaded context. See the [detailed Bionic/Gemma configuration](MODELS-AND-DEBUGGING.md#use-a-model-served-by-lm-studio) for authentication, other model sizes and structured-output requirements. [Bionic local API instructions](https://github.com/meta-models/meta-oss-cookbook/blob/main/inference-server/lm-studio.md)
-
-The 600-second timeout is a starting suggestion for slow CPU inference, not a guarantee. A tested CPU-only Llama repair request exceeded it. Longer waits may still fail; use a model that fits your hardware and review the actual run's logs.
-
-**Or use Ollama:** Keep the default `.env` (`LLM_PROVIDER=ollama`, `OLLAMA_MODEL=llama3.1:8b`), start Ollama and download the model:
+If your environment does not allow local PowerShell scripts, follow its approved script policy or use ordinary manual commands:
 
 ```powershell
-ollama pull llama3.1:8b
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+if (-not (Test-Path -LiteralPath '.env')) { Copy-Item -LiteralPath '.env.example' -Destination '.env' }
+docker build -t agentic-workbench-sandbox:latest -f sandbox/Dockerfile .
+.\.venv\Scripts\python.exe examples\generate_data.py
+```
+
+## 3. Select an installed Gemma model
+
+Start Ollama and inspect actual installed models:
+
+```powershell
 ollama list
 ```
 
-The saved download is reused on later runs. Another downloaded Ollama tag can be selected in `.env`. [Ollama Windows documentation](https://docs.ollama.com/windows)
+If no Gemma is available, select and download a suitable variant. This is an example, not a mandatory or assumed installed tag:
 
-## 4. Check and start the application
+```powershell
+ollama pull gemma3:4b
+ollama list
+```
 
-Keep the chosen model server and container engine running:
+Set `.env`:
+
+```dotenv
+AGENT_FRAMEWORK=google_adk
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=auto
+LLM_TEMPERATURE=0.1
+LLM_TIMEOUT_SECONDS=180
+LLM_CONTEXT_TOKENS=8192
+LLM_MAX_OUTPUT_TOKENS=4096
+```
+
+`auto` chooses an installed Gemma. It is not a tag for `ollama pull`, and it never falls back to a cloud service. Pin the exact installed tag instead for repeatable demos. CPU requests may need a longer timeout; this does not guarantee stronger reasoning or faster execution.
+
+If your existing local model application provides an OpenAI-compatible API, the retained alternative is documented in [MODELS-AND-DEBUGGING.md](MODELS-AND-DEBUGGING.md#use-a-model-served-by-lm-studio). Use its actual model ID and local URL; the application name alone is insufficient.
+
+## 4. Verify and start
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\doctor.py
-.\.venv\Scripts\python.exe scripts\check_model.py --generate
+.\.venv\Scripts\python.exe scripts\check_model.py --generate --capabilities
+.\scripts\start.ps1 -StartServices
 ```
 
-`doctor.py` succeeds only when the selected model service, model, Docker and sandbox image are available. The generation check makes a real structured request; it does not establish full workflow success. Resolve failures using [troubleshooting](../README.md#troubleshooting), then start the application:
+The doctor checks the model, engine and image. The second command performs a small real ADK structured-generation request and reports Ollama capabilities. It does not establish complete workflow success or native function calling. The implementation uses structured reasoning plus deterministic approved operations.
+
+Open [http://127.0.0.1:8501](http://127.0.0.1:8501). Keep PowerShell open. The startup script can launch installed services, but allow the engine time to become ready.
+
+If both engines are installed, start the intended one first; automatic startup otherwise checks Rancher Desktop before Docker Desktop. Select its matching Docker context.
+
+For manual application startup:
 
 ```powershell
-.\scripts\start.ps1
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.address 127.0.0.1 --server.port 8501
 ```
 
-Open [http://localhost:8501](http://localhost:8501) and leave the PowerShell window open. Upload `examples/data/customer_sales.csv` and try the sales problem in [examples/scenarios.md](../examples/scenarios.md). Review the proposals, then choose **Approve & implement**.
+Later starts reuse the model, packages and images. Start services and rerun `scripts/start.ps1`; do not repeat setup routinely.
 
-On later days, start your model server and container engine, open PowerShell in the checkout and run `.\scripts\start.ps1`. Packages, model weights and the sandbox image are reused. Saved workspaces remain in the local `workspaces` folder. The default sandbox allows four CPUs and 8 GB RAM in addition to the model's memory; adjust `.env` if needed.
+## 5. Demonstrate all three workflows
 
-For edits, open this same checkout in Bionic or an editor. Application code remains editable on your laptop, and generated solutions can be reviewed and rerun in a new sandbox workspace. Follow the [code and debugging guide](MODELS-AND-DEBUGGING.md#edit-and-debug-the-code).
+Follow [MVP-DEMO-GUIDE.md](MVP-DEMO-GUIDE.md):
+
+1. Migration Studio: load synthetic payroll, generate mappings, review/approve, execute, inspect gaps and export.
+2. Data Workbench: upload CSV, describe a problem, approve a proposal, execute and inspect actual persisted outputs.
+3. External application: register an existing trusted image, launch, open the local URL and stop.
+
+To build the included external demo without additional packages:
+
+```powershell
+docker build --pull=false -f examples/external_app/Dockerfile -t workbench-launcher-demo:latest .
+```
+
+Register `workbench-launcher-demo:latest` with internal port `8501`.
+
+## 6. Develop and stop
+
+Edit this same checkout in an editor. Host code changes normally need an application restart; sandbox runner/package changes need an image rebuild. [The debugging guide](MODELS-AND-DEBUGGING.md#edit-and-debug-the-code) maps relevant files and safe reruns.
+
+Cancel active generic workbench jobs through the monitor, wait for migration actions to finish, and stop external applications through their Stop buttons. Then Ctrl+C stops Streamlit. Quit Ollama and the selected container engine when you want to release their resources. Saved inputs, model weights and workspace results remain on disk.
+
+No cloud account, Gemini key, Kubernetes or separate API backend is part of this setup.

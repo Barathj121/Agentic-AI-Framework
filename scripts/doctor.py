@@ -29,7 +29,10 @@ def main() -> int:
     print("\nIf Docker is unavailable, start Docker Desktop (WSL2, Linux containers) or Rancher Desktop (Moby/dockerd).")
     print("If the sandbox image is missing: docker build -t agentic-workbench-sandbox:latest -f sandbox/Dockerfile .")
     if settings.llm_provider == "ollama":
-        print(f"If the model is missing: ollama pull {settings.ollama_model}")
+        if settings.ollama_model.lower() == "auto":
+            print("If no Gemma is installed: run ollama list, then ollama pull <your-chosen-Gemma-tag>. Set OLLAMA_MODEL to its exact tag or keep auto.")
+        else:
+            print(f"If the model is missing: ollama pull {settings.ollama_model}")
     else:
         print("If the model is missing: enable the local model API in Bionic/LM Studio, load the model, and set LLM_MODEL to its exact /v1/models ID.")
     services = report.get("services", {})
