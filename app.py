@@ -21,7 +21,7 @@ from workbench.service import Service
 from workbench.settings import Settings
 from workbench.workspace import safe_path
 
-PAGES = ["Home", "Migration Studio", "External applications", "New workspace", "Solution proposals", "Execution monitor", "Results", "Workspace history", "ClariFi Agent"]
+PAGES = ["Home", "Migration Studio", "ClariFi Agent", "External applications", "New workspace", "Solution proposals", "Execution monitor", "Results", "Workspace history"]
 ACTIVE = {"PROPOSING", "UNDERSTANDING", "EXPLORING", "GENERATING_PROPOSALS", "CHECKING_FEASIBILITY",
           "BUILDING", "GENERATING", "EXECUTING", "VALIDATING", "REPAIRING", "RUNNING", "QUEUED", "APPROVED",
           "EVALUATING_FEASIBILITY", "PLAN_APPROVED", "GENERATING_SOLUTION"}
@@ -45,12 +45,17 @@ def home_page(service: Service) -> None:
     st.header("Agentic Data & Application Workbench")
     st.write("Build, execute and explore data-driven solutions.")
     st.subheader("Applications")
-    migration, external = st.columns(2)
+    migration, clarifi, external = st.columns(3)
     with migration.container(border=True):
         st.subheader("Migration Studio")
         st.write("Assess source-to-target fit, review mappings, transform data and export a reusable connector.")
         if st.button("Launch Migration Studio", type="primary", width="stretch"):
             navigate("Migration Studio")
+    with clarifi.container(border=True):
+        st.subheader("ClariFi Agent :blue-badge[Finance]")
+        st.write("Review company backgrounds and trading risks for more informed financial decisions.")
+        if st.button("Launch ClariFi Agent", type="primary", width="stretch"):
+            navigate("ClariFi Agent")
     with external.container(border=True):
         st.subheader("External application")
         st.write("Register and launch a trusted local Docker application.")
