@@ -151,11 +151,16 @@ Home, Migration Studio, Data Workbench and ClariFi require no GCP login. The
 external application page opens `/apps/demo/` on the same HTTPS origin; judges
 never receive a localhost address or need to forward a port.
 
-Each browser session receives a server-generated workspace scope. Visitors see
-only that session's workspaces and financial reports, not another visitor's or
-the operator's history. Download reports before ending the session: a new browser
-session starts with a new scope. Stored files remain on the disk for operator
-recovery/cleanup; anonymous users cannot reopen them by browsing global history.
+Each new visitor receives a server-generated workspace scope and a private URL
+containing `public_session_id`. Bookmark that complete URL to reopen the same
+saved workspaces and financial reports after a refresh, browser restart, or later
+visit. The ID is a bearer access token: anyone with the complete link can access
+that scope, so do not share it publicly. Opening the base URL without the token
+starts a separate session. Visitors cannot browse another scope or the operator's
+history. Invalid or deleted scope links offer an explicit fresh-session action.
+Stored files remain on the disk for operator recovery/cleanup. Older sessions
+without a saved link require operator recovery; the public UI does not list all
+visitor directories.
 This scoping does not add accounts, authorization roles or production tenant IAM.
 
 Public file uploads are limited to **25 MiB per file** to fit Cloud Run's 32 MiB
@@ -224,7 +229,8 @@ the public URL; only operators need IAP/OS Login permissions.
    Verify missing approval and changed model are rejected; a cloud/quota failure
    must never fall back to local rules or claim success.
 7. Restart Streamlit and verify private operator history and stored visitor data
-   remain on disk. New anonymous sessions must not inherit existing sessions.
+   remain on disk. Reopen a bookmarked private URL and verify its history is
+   restored; opening the base URL must not inherit an existing visitor's history.
    Reboot the VM and recheck Docker, Ollama, both UIs, the demo route and gateway.
 
 View runtime logs with `sudo journalctl -u agentic-workbench -n 100 --no-pager`

@@ -108,12 +108,20 @@ class SandboxManager:
     def health(self) -> dict:
         try:
             daemon = self._docker(["info", "--format", "{{.ServerVersion}}"], timeout=8)
-            if daemon.returncode:
+            # Some Docker proxies return exit code zero alongside a backend
+            # connection error and no version. A CLI exit is not readiness.
+            version = daemon.stdout.strip()
+            if daemon.returncode or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?(?:[-+~][\w.-]+)?", version):
                 return {"available": False, "image_available": False,
-                        "error": daemon.stderr.strip()[-1500:] or "Docker daemon is unavailable"}
-            image = self._docker(["image", "inspect", self.settings.sandbox_image], timeout=8)
-            return {"available": True, "image_available": image.returncode == 0,
-                    "error": None if image.returncode == 0 else "Sandbox image is missing. Run the documented docker build command."}
+                        "error": daemon.stderr.strip()[-1500:] or "Docker daemon did not return a valid server version"}
+            image = self._docker(["image", "inspect", self.settings.sandbox_image, "--format", "{{.Id}}"], timeout=8)
+            if image.returncode == 0 and re.fullmatch(r"sha256:[0-9a-fA-F]{64}", image.stdout.strip()):
+                return {"available": True, "image_available": True, "error": None}
+            error = image.stderr.strip()[-1500:] or "Docker did not return a valid sandbox image ID"
+            missing = any(message in error.lower() for message in ("no such image", "no such object"))
+            if missing:
+                error += "\nSandbox image is missing. Run the documented docker build command."
+            return {"available": missing, "image_available": False, "error": error}
         except (OSError, subprocess.SubprocessError) as exc:
             return {"available": False, "image_available": False, "error": str(exc)}
 

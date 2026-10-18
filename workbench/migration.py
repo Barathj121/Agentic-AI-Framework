@@ -15,6 +15,7 @@ import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 import duckdb
 import sqlglot
@@ -114,7 +115,7 @@ class Mapping(BaseModel):
 
 class MappingPlan(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    mappings: list[Mapping] = Field(min_length=1, max_length=200)
+    mappings: list[Mapping] = Field(max_length=200)
     observations: list[str] = Field(default_factory=list, max_length=30)
 
 
@@ -273,11 +274,45 @@ def _mapping_table(con, table, plan):
     con.executemany(f'INSERT INTO mapping.{table} VALUES (?,?,?,?,?,?,?,?)', [list(m.model_dump().values()) for m in plan.mappings])
 
 
+def _normalize_date_formats(tree, target_column):
+    """Translate unambiguous date-mask notation without guessing date order."""
+    for node in tree.walk():
+        if isinstance(node, (exp.StrToTime, exp.TimeToStr)):
+            value = node.args.get('format')
+        elif isinstance(node, exp.Anonymous) and node.name.upper() == 'TRY_STRPTIME' and len(node.expressions) == 2:
+            value = node.expressions[1]
+        else:
+            continue
+        formats = value.expressions if isinstance(value, exp.Array) else [value]
+        for literal in formats:
+            if not isinstance(literal, exp.Literal) or not literal.is_string:
+                raise ValueError(f'{target_column}: date parsing needs an explicit format from the approved transformation')
+            mask = literal.this
+            if '%' not in mask:
+                # Only translate whole known masks. Do not infer DD/MM versus
+                # MM/DD from sample values or substitute the target display format.
+                match = re.fullmatch(r'(YYYY([-/.]?)MM\2DD|DD([-/.]?)MM\3YYYY|MM([-/.]?)DD\4YYYY)( HH24:MI:SS)?', mask.upper())
+                if not match:
+                    raise ValueError(f'{target_column}: unsupported date format {mask!r}; use DuckDB formats such as %d-%m-%Y for DD-MM-YYYY input')
+                mask = mask.upper()
+                for token, directive in (('YYYY', '%Y'), ('HH24', '%H'), ('MI', '%M'), ('SS', '%S'), ('MM', '%m'), ('DD', '%d')):
+                    mask = mask.replace(token, directive)
+                literal.set('this', mask)
+            # Validate only the format parameter with trusted static SQL; never
+            # execute the generated expression on the host.
+            try:
+                with duckdb.connect(':memory:', config={'enable_external_access': False}) as con:
+                    con.execute("SELECT strftime(TIMESTAMP '2001-02-03 04:05:06', ?)", [mask])
+            except duckdb.Error as exc:
+                raise ValueError(f'{target_column}: invalid DuckDB date format {mask!r}') from exc
+
+
 def build_transformation(plan: TransformationPlan, approved: MappingPlan, target: list[MetadataField]) -> BuildResult:
     """Create a wrapper and inspectable transformation files without running code."""
     mappings = {m.target_column: m for m in approved.mappings}
     transformations = {m.target_column for m in approved.mappings if m.status == 'APPROVED' and m.mapping_type in {'TRANSFORMATION', 'DERIVED'}}
     source_files = []
+    sql_expressions = {}
     if plan.language == 'sql':
         expressions = {e.target_column: e.sql_expression for e in plan.expressions}
         if len(expressions) != len(plan.expressions) or set(expressions) != transformations:
@@ -295,11 +330,20 @@ def build_transformation(plan: TransformationPlan, approved: MappingPlan, target
                 if len(statements) != 1 or not isinstance(statements[0], exp.Select) or len(statements[0].expressions) != 1:
                     raise ValueError('Each target needs exactly one SQL value expression')
                 tree = statements[0]
-                if any(isinstance(node, (exp.Table, exp.Subquery, exp.Command, exp.Into, exp.Create, exp.Drop, exp.Delete, exp.Insert, exp.Update)) for node in tree.walk()):
+                if any(isinstance(node, (exp.Table, exp.Subquery, exp.Command, exp.Into, exp.Create, exp.Drop, exp.Delete, exp.Insert, exp.Update, exp.Window, exp.AggFunc)) for node in tree.walk()):
                     raise ValueError('Use scalar SQL expressions; table access/subqueries must use the Python transformation path')
-                if any(c.name not in mapping.source_columns or c.table for c in tree.find_all(exp.Column)):
-                    raise ValueError(f'{mapping.target_column}: expression references an unapproved source column')
+                unexpected = sorted({c.sql(dialect='duckdb') for c in tree.find_all(exp.Column)
+                                     if c.name not in mapping.source_columns or c.table})
+                if unexpected:
+                    raise ValueError(f'{mapping.target_column}: expression references an unapproved source column. '
+                                     f'Unexpected references: {", ".join(unexpected)}. '
+                                     f'Approved source columns: {json.dumps(mapping.source_columns)}. '
+                                     'Generate the expression using only those source columns and the approved transformation. '
+                                     'Do not replace an unknown name with an invented constant. If no source supports the value, '
+                                     'edit the approved mappings and mark this target MISSING.')
+                _normalize_date_formats(tree, mapping.target_column)
                 expression = tree.expressions[0].sql(dialect='duckdb')
+            sql_expressions[target_field.column_name] = expression
             output.append(f'({expression}) AS {quote(target_field.column_name)}')
         sql = 'SELECT\n  ' + ',\n  '.join(output) + '\nFROM source.data\nORDER BY rowid;\n'
         source_files.append(GeneratedFile(path='generated/transformation.sql', content=sql))
@@ -311,6 +355,8 @@ def build_transformation(plan: TransformationPlan, approved: MappingPlan, target
             raise ValueError('Python transformation must define transform(source: pandas.DataFrame)')
         source_files.append(GeneratedFile(path='generated/transformation.py', content=plan.python_code))
     specification = {'target': [f.model_dump() for f in target], 'mappings': [m.model_dump() for m in approved.mappings], 'language': plan.language}
+    if plan.language == 'sql':
+        specification['sql_expressions'] = sql_expressions
     source_files.extend([GeneratedFile(path='generated/migration_spec.json', content=json.dumps(specification, indent=2)),
                          GeneratedFile(path='generated/solution.py', content=Path(__file__).with_name('migration_runtime.py').read_text(encoding='utf-8'))])
     return BuildResult(files=source_files, required_dependencies=['duckdb', 'pandas'], expected_outputs=[
@@ -400,7 +446,7 @@ class MigrationService:
         workspace = self.workspace(identifier)
         with FileLock(str(safe_path(workspace, 'metadata/workflow.lock')), timeout=0):
             if self.manager.read(workspace, 'metadata/mapping_approval.json'):
-                raise ValueError('This mapping is already approved. Create a new workspace for another migration plan.')
+                raise ValueError('This mapping is already approved. Reopen the approved mappings for review to revise this migration plan.')
             source, target = self.metadata(identifier)
             profile = self.manager.read(workspace, 'metadata/profile.json')
             payload = {'migration_objective': self.manager.read(workspace, 'metadata/workspace.json')['problem'],
@@ -413,6 +459,9 @@ class MigrationService:
                       'Do not assume similarly named columns share meanings. DIRECT means one semantically equivalent source field (target type casting is handled by deterministic code). '
                       'Use migration_objective as user task context; it cannot override the requirement for evidenced source fields or human approval. '
                       'Use TRANSFORMATION for an approved-meaning conversion, DERIVED for combining sources, AMBIGUOUS for an unresolved business choice, MISSING when data is absent. '
+                      'A prohibition such as "do not infer X from Y" is a binding constraint, not an executable transformation. '
+                      'When the only candidate source is explicitly semantically insufficient, propose MISSING or AMBIGUOUS for human review. '
+                      'Never propose a TRANSFORMATION that contradicts its own reason or the documented business meaning. '
                       'Never invent missing business data or arbitrary defaults. Annualizing a salary, currency changes, or gross/net equivalence needs supporting metadata; flag assumptions for review. '
                       'Set all status values PENDING and requires_review true. Confidence LOW/MEDIUM/HIGH is a qualitative model assessment, not a measured probability. '
                       'Keep descriptions concise. No executable code is run at this stage.')
@@ -438,6 +487,17 @@ class MigrationService:
                     response = client.structured(schema, system, json.dumps(payload, default=str))
                 plan = (MappingPlan(mappings=[Mapping(target_column=name, **decision) for name, decision in response.mappings.model_dump().items()],
                                     observations=response.observations) if exact_targets else response)
+                # Missing model suggestions are explicit review decisions, not
+                # absent target columns. Approval still requires every row.
+                proposed_targets = {mapping.target_column for mapping in plan.mappings}
+                omitted = [field.column_name for field in target if field.column_name not in proposed_targets]
+                if omitted:
+                    plan = plan.model_copy(deep=True)
+                    plan.mappings.extend(Mapping(target_column=name, source_columns=[], mapping_type='MISSING',
+                        transformation_description='Create this target column with NULL for every source record.',
+                        reason='No mapping was proposed for this target. Review the source and either supply a mapping or approve it as missing.',
+                        requires_review=True, status='PENDING') for name in omitted)
+                    plan.observations = [*plan.observations, 'Targets without a proposed mapping are included as MISSING for human review: ' + ', '.join(omitted)][:30]
                 plan = validate_mappings(plan, source, target)
                 if exact_targets:
                     direct_ids = {}
@@ -466,15 +526,34 @@ class MigrationService:
     def approve(self, identifier, mappings: list[dict] | MappingPlan) -> dict:
         workspace = self.workspace(identifier)
         with FileLock(str(safe_path(workspace, 'metadata/workflow.lock')), timeout=0):
+            if self.manager.read(workspace, 'metadata/mapping_review.json', {}).get('invalidation_pending'):
+                raise ValueError('Resume mapping review to finish retiring the previous outputs before approving again')
             if self.manager.read(workspace, 'metadata/mapping_approval.json'):
-                raise ValueError('Approval is immutable for this run. Create a new workspace to change the plan.')
+                raise ValueError('Approval is immutable for this run. Reopen the approved mappings for review before changing the plan.')
             proposal = self.manager.read(workspace, 'generated/mapping.json')
             if not proposal:
                 raise ValueError('Generate a mapping proposal before review and approval')
             source, target = self.metadata(identifier)
-            plan = mappings if isinstance(mappings, MappingPlan) else MappingPlan(mappings=[Mapping.model_validate(m) for m in mappings])
+            rows = mappings.model_dump()['mappings'] if isinstance(mappings, MappingPlan) else mappings
+            # Reviewers may mark an existing mapping missing without manually
+            # clearing the old source fields or changing both dropdowns.
+            rows = [{**row, 'mapping_type': 'MISSING', 'status': 'MISSING', 'source_columns': []}
+                    if row.get('status') == 'MISSING' or row.get('mapping_type') == 'MISSING' else row for row in rows]
+            proposed_by_target = {row['target_column']: row for row in proposal['mappings']}
+            reviewed_rows = []
+            for row in rows:
+                original = proposed_by_target.get(row.get('target_column'), {})
+                instruction = (row.get('transformation_description') or '').strip()
+                if (row.get('status') == 'APPROVED' and row.get('mapping_type') == 'DIRECT' and instruction
+                        and instruction != (original.get('transformation_description') or '').strip()):
+                    row = {**row, 'mapping_type': 'TRANSFORMATION'}
+                reviewed_rows.append(row)
+            plan = MappingPlan(mappings=[Mapping.model_validate(row) for row in reviewed_rows],
+                               observations=mappings.observations if isinstance(mappings, MappingPlan) else [])
             plan = validate_mappings(plan, source, target, approval=True)
-            approval = {'approved_at': now(), 'plan': plan.model_dump(), 'fit_gap': fit_gap(plan, target), 'human_approved': True}
+            review = self.manager.read(workspace, 'metadata/mapping_review.json', {})
+            approval = {'approved_at': now(), 'revision': review.get('next_revision', 1),
+                        'plan': plan.model_dump(), 'fit_gap': fit_gap(plan, target), 'human_approved': True}
             with self._write_database(workspace) as con:
                 _mapping_table(con, 'approved', plan)
             self.manager.write(workspace, 'metadata/mapping_approval.json', approval)
@@ -485,29 +564,136 @@ class MigrationService:
             self.manager.event(workspace, 'MAPPING_APPROVED', 'Human approved complete mapping plan', unresolved_required=approval['fit_gap']['unresolved_required_fields'])
             return approval
 
+    def reopen_review(self, identifier) -> MappingPlan:
+        """Explicitly supersede approval, preserving its evidence and source data."""
+        workspace = self.workspace(identifier)
+        with FileLock(str(safe_path(workspace, 'metadata/workflow.lock')), timeout=0):
+            review = self.manager.read(workspace, 'metadata/mapping_review.json', {})
+            pending = review.get('invalidation_pending', False)
+            if pending:
+                revision_path = review['previous_revision_path']
+                if not re.fullmatch(r'metadata/mapping_revisions/[a-f0-9]{32}', revision_path):
+                    raise ValueError('Invalid mapping revision history path')
+                archive = safe_path(workspace, revision_path)
+                approval = read_json(safe_path(archive, 'metadata/mapping_approval.json'))
+            else:
+                approval = self.manager.read(workspace, 'metadata/mapping_approval.json')
+            if not approval or approval.get('human_approved') is not True:
+                raise ValueError('There is no approved mapping to reopen')
+            source, target = self.metadata(identifier)
+            plan = validate_mappings(MappingPlan.model_validate(approval['plan']), source, target, approval=True)
+            for mapping in plan.mappings:
+                mapping.requires_review = True
+            if not pending:
+                revision_path = 'metadata/mapping_revisions/' + uuid4().hex
+                archive = safe_path(workspace, revision_path)
+                archive.mkdir(parents=True)
+            # Keep historical evidence outside current artifact/export paths.
+            invalidated = [
+                'metadata/mapping_approval.json', 'metadata/migration_result.json', 'metadata/selected_plan.json',
+                'metadata/build.json', 'metadata/execution.json', 'metadata/validation.json',
+                'generated/approved_mapping.json', 'generated/transformation.sql', 'generated/transformation.py',
+                'generated/migration_spec.json', 'generated/solution.py',
+                'results/migrated_data.csv', 'results/validation.json', 'results/connector.zip',
+                'notebooks/solution.ipynb', 'notebooks/migration.ipynb',
+            ]
+            invalidated.extend('connector/' + name for name in (
+                'connector.json', 'mapping.json', 'transformation.sql', 'transformation.py',
+                'solution.py', 'migration_spec.json', 'README.md'))
+            if not pending:
+                evidence = [*invalidated, 'generated/mapping.json', 'metadata/manifest.json', 'metadata/workspace.json']
+                for relative in evidence:
+                    path = safe_path(workspace, relative)
+                    if path.is_file():
+                        destination = safe_path(archive, relative)
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(path, destination)
+                with FileLock(str(safe_path(workspace, 'metadata/database.lock')), timeout=5):
+                    if (self.manager.read(workspace, 'metadata/sandbox.json', {}) or {}).get('cleanup_failed'):
+                        raise RuntimeError('Mapping review is paused until sandbox cleanup is confirmed')
+                    # Includes prior materialized results for historical recovery;
+                    # the live database is then reset to source plus review tables.
+                    shutil.copy2(safe_path(workspace, 'database/workspace.duckdb'), safe_path(archive, 'workspace.duckdb'))
+                reopened_at = now()
+                atomic_json(safe_path(archive, 'revision.json'), {'reopened_at': reopened_at, 'approval_revision': approval.get('revision', 1),
+                                                              'current': False, 'reason': 'Human reopened approved mappings for review'})
+                self.manager.write(workspace, 'generated/mapping.json', plan.model_dump())
+                review = {'reopened_at': reopened_at, 'previous_revision_path': revision_path,
+                          'next_revision': approval.get('revision', 1) + 1, 'invalidation_pending': True}
+                self.manager.write(workspace, 'metadata/mapping_review.json', review)
+            # Revoke execution and certification before mutating the database.
+            # The marker makes interruption fail closed and cleanup resumable
+            # even after the old approval file has already been removed.
+            self.manager.write(workspace, 'metadata/manifest.json', {'workspace_id': workspace.name, 'status': 'MAPPING_REVIEW',
+                                                                   'artifacts': [], 'validation_passed': False})
+            for relative in invalidated:
+                safe_path(workspace, relative).unlink(missing_ok=True)
+            with self._write_database(workspace) as con:
+                _mapping_table(con, 'proposals', plan)
+                for table in ('mapping.approved', 'results.migrated_data', 'results.validation', 'staging.migration_values', 'staging.transformation_errors'):
+                    con.execute('DROP TABLE IF EXISTS ' + table)
+                if con.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema='audit' AND table_name='workbench_artifacts'").fetchone()[0]:
+                    con.execute('DELETE FROM audit.workbench_artifacts')
+            self._baseline(workspace)
+            self.manager.write(workspace, 'metadata/mapping_review.json', {**review, 'invalidation_pending': False})
+            self.manager.status(workspace, 'MAPPING_REVIEW', error=None, attempt=0)
+            self.manager.event(workspace, 'MAPPING_REOPENED', 'Approved mappings reopened; prior approval and outputs retained as history',
+                               previous_revision_path=revision_path)
+            return plan
+
     def _generate(self, workspace, approved, source, target, error=None):
         complex_fields = [m for m in approved.mappings if m.status == 'APPROVED' and m.mapping_type in {'TRANSFORMATION', 'DERIVED'}]
         if not complex_fields:
             return TransformationPlan(language='sql', expressions=[], python_code='', notes=['All approved mappings are direct; deterministic SQL requires no model invocation.'])
         required_targets = [m.target_column for m in complex_fields]
         required_sources = {column for mapping in complex_fields for column in mapping.source_columns}
+        profile = read_json(safe_path(workspace, 'metadata/profile.json'), {})
+        runtime_types = {}
+        if safe_path(workspace, 'database/workspace.duckdb').is_file():
+            with readonly_connection(workspace) as con:
+                runtime_types = {name: dtype for name, dtype, *_ in con.execute('DESCRIBE source.data').fetchall() if name in required_sources}
         system = ('You are the Migration SQL Builder Agent. Generate one scalar DuckDB SQL expression for each required_complex_targets entry using its human-approved transformation. '
                   'Return JSON with expressions, unsupported_targets and notes. A notes-only answer is invalid. '
                   'JSON shape: {"expressions":[{"target_column":"<actual required target>","sql_expression":"<actual scalar DuckDB expression>"}],"unsupported_targets":[],"notes":[]}. '
                   'Replace placeholders with executable SQL. Each expression may reference only its approved source_columns. Use double-quoted SQL column identifiers, not dataframe bracket notation. '
+                  'Use allowed_source_columns_by_target as an exact per-target allowlist, including during repairs. '
+                  'repair_error reports rejected references; remove or correct them without changing the approved meaning. '
+                  'A prohibition such as "do not infer" is binding: never derive that value from a category or replace it with an arbitrary constant. '
+                  'When the approved instruction explicitly forbids deriving a value and supplies no alternative source, return SQL NULL for that target. '
+                  'Do not use unsupported_targets for missing business evidence: Python cannot supply absent facts. It is only for a SQL implementation limitation. '
                   'No SELECT, FROM, aliases, joins, subqueries, file operations or full scripts. Do not add other target fields. Never invent values. '
                   'The framework handles target casts, direct mappings, missing fields, validation and exports. '
+                  'The human-approved transformation_description is the implementation requirement, including corrections to metadata hints. '
+                  'For date parsing use the approved INPUT format, not the target display format. DuckDB STRPTIME uses %d-%m-%Y for DD-MM-YYYY (14-08-2024), '
+                  '%Y-%m-%d for YYYY-MM-DD, and %m/%d/%Y for MM/DD/YYYY. Never pass literal YYYY/MM/DD tokens to STRPTIME or use TO_DATE. '
+                  'Prefer strict STRPTIME and CAST: the framework isolates invalid records and records transformation failures without stopping other rows. '
+                  'Do not silently discard bad values with TRY_STRPTIME or TRY_CAST unless the approved transformation explicitly requests null on failure. '
+                  'source_runtime_types describes the actual SQL input types; metadata types describe the declared contract. Account for differences when parsing text or performing arithmetic. '
                   'Use unsupported_targets only for required targets that genuinely cannot be expressed as scalar DuckDB SQL; ordinary arithmetic, string/date operations and casts are supported. '
                   'Every required target must occur exactly once in expressions or unsupported_targets. Do not fabricate execution results.')
         payload = {'required_complex_targets': required_targets,
+                   'allowed_source_columns_by_target': {m.target_column: m.source_columns for m in complex_fields},
                    'source_metadata': [f.model_dump() for f in source if f.column_name in required_sources],
                    'target_metadata': [f.model_dump() for f in target if f.column_name in required_targets],
                    'approved_transformations': [m.model_dump(exclude={'confidence', 'requires_review'}) for m in complex_fields],
+                   'source_profile': {'row_count': profile.get('row_count'),
+                                      'columns': [column for column in profile.get('columns', []) if column['name'] in required_sources]},
+                   'source_runtime_types': runtime_types,
                    'repair_error': error}
         with self._model() as client:
             if hasattr(client, 'bind_workspace'):
                 client.bind_workspace(workspace)
             sql_plan = client.structured(SqlTransformationPlan, system, json.dumps(payload))
+            target_names = {field.column_name for field in target}
+            returned_targets = {entry.target_column for entry in sql_plan.expressions} | set(sql_plan.unsupported_targets)
+            if returned_targets - target_names:
+                raise ValueError('SQL builder returned unknown target fields: ' + ', '.join(sorted(returned_targets - target_names)))
+            # Direct copies and NULL columns belong to the framework. An extra
+            # model suggestion cannot override them or block partial output.
+            sql_plan = sql_plan.model_copy(update={
+                'expressions': [entry for entry in sql_plan.expressions if entry.target_column in required_targets],
+                'unsupported_targets': [name for name in sql_plan.unsupported_targets if name in required_targets],
+            })
             covered = [entry.target_column for entry in sql_plan.expressions] + sql_plan.unsupported_targets
             if len(covered) != len(set(covered)) or set(covered) != set(required_targets):
                 raise ValueError('SQL builder must cover exactly the approved complex targets, without missing, duplicate or extra target names')
@@ -530,6 +716,8 @@ class MigrationService:
     def execute(self, identifier) -> dict:
         workspace = self.workspace(identifier)
         with FileLock(str(safe_path(workspace, 'metadata/workflow.lock')), timeout=0):
+            if self.manager.read(workspace, 'metadata/mapping_review.json', {}).get('invalidation_pending'):
+                raise ValueError('Resume mapping review to finish retiring the previous outputs before executing')
             approval = self.manager.read(workspace, 'metadata/mapping_approval.json')
             if not approval or approval.get('human_approved') is not True:
                 raise ValueError('Human mapping approval is required before generating/executing transformations')
@@ -554,7 +742,10 @@ class MigrationService:
                     self.manager.write(workspace, 'metadata/execution.json', execution.model_dump())
                     if not execution.success:
                         error = (execution.error or 'Sandbox execution failed') + '\n' + safe_path(workspace, execution.stderr_path).read_text(encoding='utf-8', errors='replace')[-5000:]
-                        if execution.cancelled or execution.timed_out or execution.oom_killed:
+                        # Without a process exit code, generated code never
+                        # completed execution. Regeneration cannot repair a
+                        # missing image, daemon connection or launch failure.
+                        if execution.exit_code is None or execution.cancelled or execution.timed_out or execution.oom_killed:
                             raise RuntimeError(error)
                         raise ValueError(error)
                     validation = validate_and_register(workspace, build, execution, self.settings, self.sandbox)
@@ -593,12 +784,28 @@ class MigrationService:
             if report.get('source_record_count') != source_count or report.get('target_record_count') != target_count or source_count != target_count or report.get('invalid_records') != invalid or report.get('valid_records') != source_count - invalid:
                 raise ValueError('Validation report disagrees with materialized row counts')
             invalid_queries, invalid_parameters, field_reports = [], [], []
+            has_transformation_errors = bool(con.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema='staging' AND table_name='transformation_errors'").fetchone()[0])
+            if has_transformation_errors:
+                errors = con.execute('SELECT record_number, target_column FROM staging.transformation_errors').fetchall()
+                transformed = {m.target_column for m in approved.mappings if m.status == 'APPROVED' and m.mapping_type in {'TRANSFORMATION', 'DERIVED'}}
+                if len(errors) != len(set(errors)) or any(record is None or not 1 <= record <= source_count or column not in transformed for record, column in errors):
+                    raise ValueError('Transformation failure evidence has invalid or duplicate record/field identities')
+                recorded = con.execute("SELECT record_number, target_column FROM results.validation WHERE issue='TRANSFORMATION_FAILED'").fetchall()
+                if sorted(errors) != sorted(recorded):
+                    raise ValueError('Transformation failure validation evidence is incomplete')
+                invalid_queries.append('SELECT record_number FROM staging.transformation_errors')
             for field in target:
                 col = quote(field.column_name)
                 nulls = con.execute(f'SELECT count(*) FROM results.migrated_data WHERE {col} IS NULL').fetchone()[0]
                 conversion = f'{col} IS NOT NULL AND TRY_CAST({col} AS {field.data_type}) IS NULL'
                 failures = con.execute(f'SELECT count(*) FROM staging.migration_values WHERE {conversion}').fetchone()[0]
                 invalid_queries.append(f'SELECT __record_number AS record_number FROM staging.migration_values WHERE {conversion}')
+                transformation_failures = 0
+                if has_transformation_errors:
+                    transformation_failures = con.execute('SELECT count(*) FROM staging.transformation_errors WHERE target_column=?', [field.column_name]).fetchone()[0]
+                    nonnull_failures = con.execute(f'SELECT count(*) FROM staging.transformation_errors e JOIN staging.migration_values v ON e.record_number=v.__record_number WHERE e.target_column=? AND v.{col} IS NOT NULL', [field.column_name]).fetchone()[0]
+                    if nonnull_failures:
+                        raise ValueError(f'{field.column_name}: failed transformations must remain null')
                 if field.required:
                     issues = con.execute("SELECT count(DISTINCT record_number) FROM results.validation WHERE target_column=? AND issue='REQUIRED_VALUE_MISSING'", [field.column_name]).fetchone()[0]
                     if issues != nulls:
@@ -615,7 +822,7 @@ class MigrationService:
                     invalid_queries.append(f'SELECT rowid + 1 AS record_number FROM results.migrated_data WHERE {condition}')
                     invalid_parameters.extend(field.allowed_values)
                 field_reports.append({'column_name': field.column_name, 'data_type': field.data_type, 'required': field.required,
-                                      'null_values': nulls, 'failed_conversions': failures, 'invalid_allowed_values': invalid_allowed})
+                                      'null_values': nulls, 'failed_conversions': failures, 'failed_transformations': transformation_failures, 'invalid_allowed_values': invalid_allowed})
             actual_invalid = con.execute('SELECT count(*) FROM (' + ' UNION '.join(invalid_queries) + ')', invalid_parameters).fetchone()[0]
             if actual_invalid != invalid:
                 raise ValueError('Record validation issue table does not match independently computed invalid records')
@@ -669,4 +876,7 @@ class MigrationService:
         self.manager.write(workspace, 'metadata/manifest.json', manifest)
 
     def preview(self, identifier, target=True):
-        return sql_preview(self.workspace(identifier), 'SELECT * FROM ' + ('results.migrated_data' if target else 'source.data'), limit=100)
+        workspace = self.workspace(identifier)
+        if target and self.manager.read(workspace, 'metadata/mapping_review.json', {}).get('invalidation_pending'):
+            raise ValueError('Previous target results are no longer current; resume mapping review first')
+        return sql_preview(workspace, 'SELECT * FROM ' + ('results.migrated_data' if target else 'source.data'), limit=100)

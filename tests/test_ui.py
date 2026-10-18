@@ -84,6 +84,91 @@ def test_history_reopens_a_profile_and_results_query(app_environment):
     assert len(app.dataframe[0].value) == 2
 
 
+@pytest.mark.parametrize("status,legacy", [
+    ("MIGRATION_COMPLETED", False),
+    ("MIGRATION_INCOMPLETE", False),
+    ("MIGRATION_FAILED", True),
+    ("MAPPING_REVIEW", False),
+    ("MAPPING_REVIEW_PAUSED", False),
+])
+def test_migration_history_filters_and_reopens_saved_runs(app_environment, monkeypatch, status, legacy):
+    import duckdb
+    import pandas as pd
+    from streamlit.testing.v1 import AppTest
+    from workbench.migration import Mapping, MappingPlan, MigrationService
+    from workbench.migration_runtime import materialize_and_validate
+    from workbench.settings import Settings
+
+    def forbidden_model_or_execution(*args, **kwargs):
+        raise AssertionError("Browsing saved history must not regenerate or execute a migration")
+
+    monkeypatch.setattr(MigrationService, "propose", forbidden_model_or_execution)
+    monkeypatch.setattr(MigrationService, "execute", forbidden_model_or_execution)
+    service = MigrationService(Settings.from_env())
+    service.manager.create("Unrelated data workspace", "Keep generic workspaces in All")
+    workspace = service.create("Saved payroll migration", b"identifier\nX1\nX2\n",
+        b"column_name,data_type,required,description\nnew_identifier,VARCHAR,true,Employee identifier\n")
+    missing = status == "MIGRATION_INCOMPLETE"
+    plan = MappingPlan(mappings=[Mapping(target_column="new_identifier", source_columns=[] if missing else ["identifier"],
+        mapping_type="MISSING" if missing else "DIRECT", status="MISSING" if missing else "APPROVED", reason="Reviewed identifier relationship")])
+    service.manager.write(workspace, "generated/mapping.json", plan.model_dump())
+    if status != "MAPPING_REVIEW":
+        service.approve(workspace.name, plan)
+    if status in {"MIGRATION_COMPLETED", "MIGRATION_INCOMPLETE", "MAPPING_REVIEW_PAUSED"}:
+        _, target = service.metadata(workspace.name)
+        values = pd.DataFrame({"new_identifier": [None, None] if missing else ["X1", "X2"]})
+        with duckdb.connect(str(workspace / "database/workspace.duckdb")) as con:
+            report = materialize_and_validate(con, values, [field.model_dump() for field in target],
+                [mapping.model_dump() for mapping in plan.mappings], 2)
+        service.manager.write(workspace, "results/validation.json", report)
+        report = service._verify_report(workspace, target, plan)
+        service.manager.write(workspace, "metadata/migration_result.json", report)
+        (workspace / "results/migrated_data.csv").write_text(values.to_csv(index=False), encoding="utf-8")
+    service.manager.status(workspace, "MIGRATION_COMPLETED" if status == "MAPPING_REVIEW_PAUSED" else status,
+        error="ValueError: generated transformation failed" if status == "MIGRATION_FAILED" else None)
+    if status == "MAPPING_REVIEW_PAUSED":
+        service.manager.write(workspace, "metadata/mapping_review.json", {"invalidation_pending": True})
+    if legacy:
+        metadata = service.manager.read(workspace, "metadata/workspace.json")
+        metadata.pop("kind")
+        service.manager.write(workspace, "metadata/workspace.json", metadata)
+
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20).run()
+    app.sidebar.radio[0].set_value("Migration Studio").run()
+    next(item for item in app.button if item.label == "Migration history").click().run()
+    assert not app.exception
+    assert app.session_state["page"] == "Workspace history"
+    kind_filter = next(item for item in app.selectbox if item.label == "Workspace type")
+    assert kind_filter.value == "Migrations"
+    assert any(item.value == "Saved payroll migration" for item in app.subheader)
+    assert not any(item.value == "Unrelated data workspace" for item in app.subheader)
+    expected_status = "Mapping review paused" if status == "MAPPING_REVIEW_PAUSED" else status
+    assert any(expected_status in item.value and "Updated" in item.value for item in app.caption)
+    assert any("Source records: 2" in item.value for item in app.caption)
+    if status in {"MIGRATION_COMPLETED", "MIGRATION_INCOMPLETE"}:
+        assert any("Target records: 2" in item.value and "Invalid: " in item.value for item in app.caption)
+    elif status == "MAPPING_REVIEW_PAUSED":
+        assert not any("Target records:" in item.value or "MIGRATION_COMPLETED" in item.value for item in app.caption)
+    kind_filter.set_value("All").run()
+    assert any(item.value == "Unrelated data workspace" for item in app.subheader)
+    next(item for item in app.selectbox if item.label == "Workspace type").set_value("Migrations").run()
+    next(item for item in app.button if item.key == f"open_{workspace.name}").click().run()
+    assert not app.exception
+    assert app.session_state["page"] == "Migration Studio"
+    assert app.session_state["migration_workspace_id"] == workspace.name
+    assert next(item for item in app.selectbox if item.label == "Migration workspace").value == workspace.name
+    assert not any(item.value == "Results & evidence" for item in app.header)
+    if status == "MIGRATION_FAILED":
+        assert any(item.label == "Retry approved migration" for item in app.button)
+    elif status == "MAPPING_REVIEW_PAUSED":
+        assert any(item.label == "Resume mapping review" for item in app.button)
+        assert not any(item.proto.label == "Download target CSV" for item in app.get("download_button"))
+    elif status == "MAPPING_REVIEW":
+        assert any(item.label == "Approve reviewed mapping plan" for item in app.button)
+    else:
+        assert any(item.proto.label == "Download target CSV" for item in app.get("download_button"))
+
+
 def test_synthetic_data_has_seeded_patterns_and_reproducible_sales():
     from examples.generate_data import generate_banking, generate_sales
     rows, annotations = generate_banking(1000, 42)

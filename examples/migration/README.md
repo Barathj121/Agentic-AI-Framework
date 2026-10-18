@@ -23,6 +23,35 @@ Record-level validation issues are materialized in `results.validation`.
 Download the actual target CSV, approved mapping, validation report, transformation
 source, notebook, and reusable connector ZIP from the result page.
 
+Use **Transformation / review instructions** to describe any conversion, such as
+trimming and uppercasing a code or converting monthly pay to annual pay. Editing
+those instructions on an approved DIRECT suggestion promotes it to TRANSFORMATION;
+unchanged direct-copy descriptions keep their original meaning. Instructions are
+saved with the approval and passed to the builder. MISSING decisions take priority:
+the framework creates those target columns as typed NULLs without model inference.
+Targets omitted by the model are also shown as MISSING rows for review.
+
+For an input date such as `14-08-2024`, choose **TRANSFORMATION** and describe
+the input format in **Transformation**, for example: "Parse DD-MM-YYYY input as
+a date; flag invalid values." The builder receives this approved correction even
+when a metadata hint says ISO. DuckDB uses `%d-%m-%Y` for this input format;
+common `DD-MM-YYYY` masks in generated SQL are translated without changing the
+day/month order. Invalid conversions are reported against individual records.
+
+Choose **MISSING** for unavailable fields; old source selections are cleared on
+approval. Missing required fields make the output incomplete but do not block
+the partial CSV export. Results and export tabs remain available after approval;
+failed executions explain the next step and keep technical details available.
+Use **Retry approved migration** when generation or the runtime needs another
+attempt. To correct a decision, choose **Edit approved mappings**, change the
+existing review table, and approve it again before executing. The uploaded data
+stays in the same workspace, and the previous approval is retained for reference.
+Earlier results are no longer presented as validated for the revised mapping.
+
+Use **Migration history** to open the saved migrations list. Each entry shows
+its status and available record counts; **Open workspace** restores its review,
+results, and exports. Failed and incomplete migrations remain in that list.
+
 `scripts/migration_demo.py --fixture-model --approve-demo` exercises the same
 backend and real Docker sandbox with explicitly mocked model responses. That mode
 does not demonstrate Gemma inference. Without `--fixture-model`, the script uses

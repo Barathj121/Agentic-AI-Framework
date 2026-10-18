@@ -177,7 +177,7 @@ After reviewing it, explicitly authorize one isolated rerun:
 .\.venv\Scripts\python.exe scripts\debug_solution.py --workspace 'uc_...' --execute-reviewed-code
 ```
 
-This creates a new DEBUG workspace with the original CSV and reviewed source, executes once in Docker, and records provenance. It makes no model calls and leaves the original history intact. This is the existing generic-workbench debugging path, not a migration-connector importer. For a changed migration approval, create a new migration workspace and review the new plan.
+This creates a new DEBUG workspace with the original CSV and reviewed source, executes once in Docker, and records provenance. It makes no model calls and leaves the original history intact. This is the existing generic-workbench debugging path, not a migration-connector importer. To revise a Migration Studio approval, open the same saved migration and choose **Edit approved mappings**. The uploaded source stays in place; previous approvals and outputs are archived, and current execution/export approval is revoked until you review and approve the revised plan. **Previous mapping approvals** shows the saved historical decisions. If reopening is interrupted, choose **Resume mapping review** before approving or executing again.
 
 Do not run generated modules/notebook cells or deserialize generated models directly on the host to bypass the sandbox.
 
