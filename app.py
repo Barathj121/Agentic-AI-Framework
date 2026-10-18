@@ -6,7 +6,10 @@ Generated programs are only executed by the Docker sandbox, never by this app.
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import replace
 from pathlib import Path
+from uuid import uuid4
 
 import pandas as pd
 import plotly.io as pio
@@ -18,7 +21,7 @@ from ui.helpers import (
 )
 from workbench.data import database_schema, sql_preview
 from workbench.service import Service
-from workbench.settings import Settings
+from workbench.settings import Settings, public_demo_enabled
 from workbench.workspace import safe_path
 
 PAGES = ["Home", "Migration Studio", "ClariFi Agent", "External applications", "New workspace", "Solution proposals", "Execution monitor", "Results", "Workspace history"]
@@ -28,8 +31,16 @@ ACTIVE = {"PROPOSING", "UNDERSTANDING", "EXPLORING", "GENERATING_PROPOSALS", "CH
 
 
 @st.cache_resource
-def get_service() -> Service:
-    return Service(Settings.from_env())
+def get_service(visitor_scope: str = "") -> Service:
+    settings = Settings.from_env()
+    if public_demo_enabled():
+        if not re.fullmatch(r"[a-f0-9]{32}", visitor_scope):
+            raise ValueError("A server-generated visitor scope is required for the public demo")
+        settings = replace(settings, workspace_root=safe_path(
+            settings.workspace_root, f"public-sessions/{visitor_scope}"))
+    elif visitor_scope:
+        raise ValueError("Visitor scopes are only used by the public demo")
+    return Service(settings)
 
 
 def navigate(page: str) -> None:
@@ -58,8 +69,9 @@ def home_page(service: Service) -> None:
             navigate("ClariFi Agent")
     with external.container(border=True):
         st.subheader("External application")
-        st.write("Register and launch a trusted local Docker application.")
-        if st.button("Register / launch application", width="stretch"):
+        st.write("Explore a preconfigured application running alongside the workbench." if public_demo_enabled()
+                 else "Register and launch a trusted local Docker application.")
+        if st.button("Open application demo" if public_demo_enabled() else "Register / launch application", width="stretch"):
             navigate("External applications")
     st.subheader("Data experimentation")
     st.write("Upload data and describe a business problem. Agents propose, generate, execute and validate computational solutions after your approval.")
@@ -496,7 +508,13 @@ def main() -> None:
         st.session_state["page"] = "ClariFi Agent"
     if st.session_state.get("page") == "Financial investigations":
         st.session_state["page"] = "ClariFi Agent"
-    service = get_service()
+    if public_demo_enabled():
+        if "public_visitor_scope" not in st.session_state:
+            st.session_state["public_visitor_scope"] = uuid4().hex
+        service = get_service(st.session_state["public_visitor_scope"])
+        st.caption("Hackathon demo · Your workspaces belong to this browser session. Download results before leaving.")
+    else:
+        service = get_service()
     if "diagnostics" not in st.session_state and st.session_state.get("page") != "ClariFi Agent":
         with st.spinner("Checking the local model and sandbox…"):
             try:

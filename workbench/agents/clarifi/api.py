@@ -20,12 +20,20 @@ MAX_BODY = 5 * 1024 * 1024
 class InvestigationRequest(Record):
     data: InvestigationInput
     approved: StrictBool = Field(default=False)
+    model: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._/-]+$")
 
 
 @app.get("/healthz")
 def health():
     # Liveness only; deliberately does not imply cloud model readiness.
-    return {"status": "ok", "agent": "clarifi", "mode": os.getenv("CLARIFI_MODE", "vertex")}
+    return {"status": "ok", "agent": "clarifi", "mode": os.getenv("CLARIFI_MODE", "vertex"),
+            "model": configured_model()}
+
+
+def configured_model():
+    if os.getenv("CLARIFI_MODE", "vertex") == "gemini":
+        return os.getenv("CLARIFI_API_MODEL", "gemini-3.5-flash-lite")
+    return os.getenv("CLARIFI_GEMINI_MODEL", "")
 
 
 @app.get("/agents")
@@ -39,7 +47,7 @@ def input_schema():
 
 
 def execute(body):
-    report = run_agent("clarifi", body.data, mode=os.getenv("CLARIFI_MODE", "vertex"), approved=body.approved)
+    report = run_agent("clarifi", body.data, mode=os.getenv("CLARIFI_MODE", "vertex"), approved=body.approved, model=body.model)
     report["evidence_uri"] = persist(body.data, report)
     return report
 
@@ -58,6 +66,8 @@ async def investigate(request: Request):
         raise HTTPException(422, "Invalid investigation data; use the documented input schema") from None
     if body.approved is not True:
         raise HTTPException(409, "Explicit investigation approval is required")
+    if body.model is not None and body.model != configured_model():
+        raise HTTPException(409, "Selected model differs from the deployed model; review the current configuration")
     async with slots:
         try:
             return await run_in_threadpool(execute, body)

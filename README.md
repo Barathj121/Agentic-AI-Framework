@@ -10,6 +10,11 @@ Gemini 3.5 Flash-Lite is the default API model. The existing local workflow rema
 `requirements-clarifi.txt` only when using the financial agent; scores are
 explainable triage rules and require independent accuracy evaluation.
 
+**Full Google Cloud deployment:** [deployment guide](docs/GCP-DEPLOYMENT.md)
+prepares the complete workbench on Compute Engine with Docker/Gemma and an
+authenticated ClariFi service on Cloud Run. This preserves Docker-dependent
+migration and application workflows; actual GCP execution still needs verification.
+
 Google ADK runs the core workbench's agent execution and structured reasoning. Gemma is served locally through Ollama; Streamlit provides the UI, DuckDB stores workspace data, and Docker executes generated code. The core workflows require no Gemini API key, paid inference service, cloud deployment or separate backend. ClariFi has its own optional model configuration and LangGraph investigation pipeline. Results and exports come from executed code, not conversational answers.
 
 ## Start the Desktop checkout

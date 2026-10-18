@@ -4,11 +4,28 @@ from __future__ import annotations
 import streamlit as st
 
 from workbench.applications import ApplicationRegistry
+from workbench.settings import public_demo_enabled
 
 
 def render_applications(settings, navigate=None):
     """Render the registry; navigate('migration') opens the built-in application."""
     st.subheader("Applications")
+    if public_demo_enabled():
+        st.write("Explore the workbench and a preconfigured external application.")
+        with st.container(border=True):
+            st.markdown("**Migration Studio**")
+            st.write("Review mappings and transform your data inside the workbench.")
+            if st.button("Launch Migration Studio", key="application_builtin_migration"):
+                if navigate is not None:
+                    navigate("migration")
+                else:
+                    st.session_state["page"] = "Migration Studio"
+                st.rerun()
+        with st.container(border=True):
+            st.markdown("**Customer Insights demo**")
+            st.write("Open the preconfigured Docker application in your browser.")
+            st.link_button("Open application", "/apps/demo/")
+        return
     st.write("Open Migration Studio or launch a trusted application image already installed in Docker.")
     registry = ApplicationRegistry(settings)
     with st.expander("Register an external Docker application", expanded=False):

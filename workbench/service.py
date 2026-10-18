@@ -57,6 +57,11 @@ class Service:
         Returns a report synchronously. The ClariFi API handles optional durable
         GCS storage; existing workspace state and approval checkpoints are untouched.
         """
+        if mode == "remote":
+            if agent_id != "clarifi":
+                raise ValueError("Only ClariFi supports the Cloud Run handoff")
+            from workbench.agents.clarifi.remote import investigate
+            return investigate(payload, approved=approved, model=model)
         from workbench.agents import run_agent
         return run_agent(agent_id, payload, approved=approved, mode=mode, model=model)
 

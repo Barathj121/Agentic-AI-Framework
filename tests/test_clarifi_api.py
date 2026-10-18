@@ -61,6 +61,18 @@ def test_storage_failure_does_not_report_success(request_body, monkeypatch):
     assert "sensitive internal" not in result.text
 
 
+def test_deployment_model_mismatch_is_rejected_before_execution(request_body, monkeypatch):
+    monkeypatch.setenv("CLARIFI_MODE", "gemini")
+    monkeypatch.setenv("CLARIFI_API_MODEL", "gemini-configured")
+    request_body["model"] = "gemini-other"
+    calls = []
+    monkeypatch.setattr("workbench.agents.clarifi.api.run_agent", lambda *args, **kwargs: calls.append(kwargs))
+    with TestClient(app) as client:
+        assert client.get("/healthz").json()["model"] == "gemini-configured"
+        assert client.post("/investigations", json=request_body).status_code == 409
+    assert not calls
+
+
 def test_evidence_bundle_contains_sources_and_uses_create_only_storage(request_body, monkeypatch):
     pytest.importorskip("google.cloud.storage")
     from google.cloud import storage

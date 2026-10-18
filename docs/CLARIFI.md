@@ -240,7 +240,10 @@ or `CLARIFI_MODE=gemini` (Gemini or hosted Gemma API, Secret Manager key referen
 For API mode, set `CLARIFI_API_KEY_SECRET=YOUR_EXISTING_SECRET:VERSION` and an
 explicit `CLARIFI_API_MODEL` such as `gemini-3.5-flash-lite`. The runtime service
 account needs access to that secret version and the private evidence bucket.
-The script deploys a private investigation API; the Streamlit UI remains local.
+This API-only script deploys a private investigation service. For the complete
+application, use [the full GCP deployment](GCP-DEPLOYMENT.md): Streamlit and the
+Docker-dependent workflows run on Compute Engine, and ClariFi calls Cloud Run
+using the VM service identity. Without that configuration, the UI remains local.
 Model availability and quota for Vertex AI must be verified separately. Cloud Run
 deployment and GCP IAM have not been executed or verified in this workspace.
 

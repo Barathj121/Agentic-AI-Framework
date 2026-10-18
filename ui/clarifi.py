@@ -149,6 +149,26 @@ def input_panel(tool):
 
 
 def model_panel():
+    if os.getenv("CLARIFI_API_URL"):
+        from workbench.agents.clarifi.remote import health
+        model = os.getenv("CLARIFI_REMOTE_MODEL", "")
+        st.write("Gemini · Cloud Run")
+        st.caption("Planning and investigation run in the private Google Cloud service. The deployed model is fixed for this environment.")
+        if model:
+            st.code(model, language=None)
+        else:
+            st.warning("Configure CLARIFI_REMOTE_MODEL before running an investigation.")
+        if st.button("Check cloud service", key="clarifi_cloud_check"):
+            try:
+                result = health()
+                if result.get("status") == "ok" and result.get("model") == model:
+                    st.success("Cloud service reachable · " + model)
+                    st.caption("Model generation, quota and evidence storage are verified when an investigation runs.")
+                else:
+                    st.error("The deployed model differs from this UI's configuration.")
+            except Exception:
+                st.error("Cloud service check failed. Check service identity and configuration.")
+        return "remote", model
     choice = st.selectbox("Reasoning model", ["Local Gemma via Ollama", "Gemini API · AI Studio", "Gemini on Vertex AI", "Offline rules demo"],
                           key="clarifi_model_choice")
     mode = {"Local Gemma via Ollama": "local", "Gemini API · AI Studio": "gemini", "Gemini on Vertex AI": "vertex", "Offline rules demo": "rules"}[choice]
@@ -361,13 +381,16 @@ def financial_page(service):
                 location = save_bundle(service.settings.workspace_root, data, report)
                 bundle = {"input": data.model_dump(mode="json"), "report": report}
                 st.session_state["clarifi_current_result"] = {"fingerprint": fingerprint, "bundle": bundle}
-                status.update(label="Investigation completed and saved locally", state="complete", expanded=False)
+                status.update(label="Investigation completed and saved" if mode == "remote" else "Investigation completed and saved locally", state="complete", expanded=False)
+                if report.get("evidence_uri"):
+                    st.caption("Cloud evidence bundle: " + report["evidence_uri"])
                 st.caption(f"Saved evidence bundle: {location.name}")
         except Exception as error:
             # Local adapter errors are redacted by the shared client; do not echo
             # raw Pydantic/model/cloud exceptions that may contain submitted rows.
             from workbench.llm import LLMError
-            if isinstance(error, LLMError):
+            from workbench.agents.clarifi.remote import RemoteClariFiError
+            if isinstance(error, (LLMError, RemoteClariFiError)):
                 st.error(str(error))
             elif isinstance(error, RuntimeError) and str(error).startswith(("Gemini API request failed (HTTP ", "Gemini request ", "Gemini could not be reached.")):
                 st.error(str(error))

@@ -10,6 +10,10 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 
+def public_demo_enabled() -> bool:
+    return os.getenv("PUBLIC_DEMO", "").strip().lower() in {"1", "true"}
+
+
 def validate_local_url(value: str, name: str) -> str:
     """Accept loopback/private LAN literals without DNS or public-cloud endpoints."""
     try:

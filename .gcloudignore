@@ -8,3 +8,6 @@ __pycache__
 .pytest_cache
 *.pyc
 clarifi-report*.json
+outputs
+node_modules
+.DS_Store

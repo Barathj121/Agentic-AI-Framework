@@ -27,6 +27,32 @@ def open_ui():
     return app.run()
 
 
+def test_cloud_ui_handoff_keeps_approval_and_saves_evidence(financial_ui, monkeypatch):
+    from workbench.service import Service
+    monkeypatch.setenv("CLARIFI_API_URL", "https://clarifi-test.run.app")
+    monkeypatch.setenv("CLARIFI_REMOTE_MODEL", "gemini-cloud-test")
+    calls = []
+
+    def investigate(self, agent, payload, **kwargs):
+        calls.append((agent, kwargs))
+        report = ClariFiAgent(mode="rules").run(payload, approved=True)
+        report["provenance"].update(model="gemini-cloud-test", ai_used=True)
+        report["evidence_uri"] = "gs://private-evidence/report.json"
+        return report
+
+    monkeypatch.setattr(Service, "run_agent", investigate)
+    app = open_ui()
+    assert not app.exception
+    assert not any(item.label == "Reasoning model" for item in app.selectbox)
+    assert next(item for item in app.button if item.label == "Run Investigation").disabled
+    app.checkbox[0].check().run()
+    next(item for item in app.button if item.label == "Run Investigation").click().run()
+    assert not app.exception
+    assert calls == [("clarifi", {"approved": True, "mode": "remote", "model": "gemini-cloud-test"})]
+    assert len(list((financial_ui / "workspaces/clarifi").glob("*.json"))) == 1
+    assert any("gs://private-evidence/report.json" in item.value for item in app.caption)
+
+
 def test_financial_intake_is_separate_and_requires_approval(financial_ui):
     app = open_ui()
     assert not app.exception

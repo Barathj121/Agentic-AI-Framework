@@ -8,6 +8,7 @@ set -euo pipefail
 : "${TAG:?Set an immutable build tag}"
 REPOSITORY="${REPOSITORY:-clarifi}"
 CLARIFI_MODE="${CLARIFI_MODE:-vertex}"
+CLARIFI_SERVICE_NAME="${CLARIFI_SERVICE_NAME:-clarifi-financial-agents}"
 case "$CLARIFI_MODE" in
   vertex)
     : "${CLARIFI_GEMINI_MODEL:?Select an available Vertex Gemini model ID}"
@@ -22,9 +23,16 @@ case "$CLARIFI_MODE" in
     ;;
   *) echo "CLARIFI_MODE must be vertex or gemini for Cloud Run" >&2; exit 2 ;;
 esac
+BUILD_FLAGS=("--quiet")
+if [[ -n "${BUILD_SERVICE_ACCOUNT:-}" ]]; then
+  : "${BUILD_SOURCE_BUCKET:?Set the private build-source bucket}"
+  BUILD_FLAGS+=("--service-account=projects/$PROJECT_ID/serviceAccounts/$BUILD_SERVICE_ACCOUNT"
+               "--gcs-source-staging-dir=gs://$BUILD_SOURCE_BUCKET/source" "--region=$REGION")
+fi
 gcloud builds submit . --project="$PROJECT_ID" --config=deploy/clarifi/cloudbuild.yaml \
+  "${BUILD_FLAGS[@]}" \
   --substitutions="_REGION=$REGION,_REPOSITORY=$REPOSITORY,_TAG=$TAG"
-gcloud run deploy clarifi-financial-agents --project="$PROJECT_ID" --region="$REGION" \
+gcloud run deploy "$CLARIFI_SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" \
   --image="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/clarifi:$TAG" \
   --service-account="$CLARIFI_SERVICE_ACCOUNT" --port=8080 --no-allow-unauthenticated \
   --cpu=2 --memory=2Gi --concurrency=2 --max-instances=2 --timeout=300 \
