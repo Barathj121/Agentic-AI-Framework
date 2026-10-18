@@ -74,3 +74,34 @@ async def investigate(request: Request):
         except Exception:
             # No offline fallback after a cloud/model/verification/storage failure.
             raise HTTPException(502, "Investigation failed; check model configuration, input scope and evidence storage. No completed report was returned.") from None
+
+
+def execute_draft(body):
+    from .screening import screen, draft
+    screening = screen(body.data, approved=body.approved)
+    report = draft(body.data, screening, approved=body.approved,
+                   mode=os.getenv('CLARIFI_MODE', 'vertex'), model=body.model)
+    report['evidence_uri'] = persist(body.data, report)
+    return report
+
+
+@app.post('/drafts')
+async def draft_investigation(request: Request):
+    chunks = bytearray()
+    async for chunk in request.stream():
+        if len(chunks) + len(chunk) > MAX_BODY:
+            raise HTTPException(413, 'Investigation exceeds 5 MiB; narrow the scope')
+        chunks.extend(chunk)
+    try:
+        body = InvestigationRequest.model_validate_json(bytes(chunks))
+    except ValidationError:
+        raise HTTPException(422, 'Invalid investigation data; use the documented input schema') from None
+    if body.approved is not True:
+        raise HTTPException(409, 'Explicit AI drafting approval is required')
+    if body.model is not None and body.model != configured_model():
+        raise HTTPException(409, 'Selected model differs from the deployed model; review the current configuration')
+    async with slots:
+        try:
+            return await run_in_threadpool(execute_draft, body)
+        except Exception:
+            raise HTTPException(502, 'AI draft did not complete; check model quota and evidence storage. Previously saved screening results remain available.') from None

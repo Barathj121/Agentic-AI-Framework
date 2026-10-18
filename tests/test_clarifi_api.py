@@ -98,3 +98,42 @@ def test_evidence_bundle_contains_sources_and_uses_create_only_storage(request_b
     assert captured["bundle"]["input"] == source.model_dump(mode="json")
     assert captured["bundle"]["report"] == report
     assert uri == "gs://private-test-evidence/investigations/synthetic-financial-demo/run-123.json"
+
+
+def test_fast_draft_approval_model_binding_and_safe_failure(request_body, monkeypatch):
+    monkeypatch.setenv('CLARIFI_MODE', 'gemini')
+    monkeypatch.setenv('CLARIFI_API_MODEL', 'fixture-gemini')
+    calls = []
+    monkeypatch.setattr('workbench.agents.clarifi.api.execute_draft', lambda *a: calls.append(a))
+    with TestClient(app) as client:
+        request_body['approved'] = False
+        assert client.post('/drafts', json=request_body).status_code == 409
+        request_body['approved'] = True
+        request_body['model'] = 'wrong-model'
+        assert client.post('/drafts', json=request_body).status_code == 409
+        assert client.post('/drafts', content=b'x' * (5*1024*1024 + 1)).status_code == 413
+    assert not calls
+
+
+def test_fast_api_draft_verifies_scores_and_never_plans(request_body, monkeypatch):
+    from workbench.agents.clarifi.models import RulesReasoner
+    class Reasoner(RulesReasoner):
+        model = 'fixture-gemini'
+        provider = 'gemini_api'
+        def plan(self, context):
+            pytest.fail('Fast drafting must not plan')
+    monkeypatch.setenv('CLARIFI_MODE', 'gemini')
+    monkeypatch.setenv('CLARIFI_API_MODEL', 'fixture-gemini')
+    monkeypatch.setattr('workbench.agents.clarifi.agent.GeminiAPIReasoner', lambda *a: Reasoner())
+    request_body['model'] = 'fixture-gemini'
+    with TestClient(app) as client:
+        response = client.post('/drafts', json=request_body)
+        assert response.status_code == 200, response.text
+        report = response.json()
+        assert report['provenance']['ai_used'] is True
+        assert report['provenance']['workflow'] == 'scores_first'
+        assert report['findings']
+        monkeypatch.setattr(Reasoner, 'summarize', lambda *a: (_ for _ in ()).throw(RuntimeError('private key detail')))
+        failure = client.post('/drafts', json=request_body)
+    assert failure.status_code == 502
+    assert 'private key detail' not in failure.text

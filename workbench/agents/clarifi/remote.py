@@ -82,3 +82,30 @@ def investigate(payload, *, approved=False, model=None) -> dict:
             or not report["evidence_uri"].startswith("gs://")):
         raise RemoteClariFiError("Cloud report did not match the approved input, model or evidence contract.")
     return report
+
+
+def draft(payload, screening, *, approved=False, model=None):
+    if approved is not True:
+        raise ValueError('Explicit AI drafting approval is required')
+    source = InvestigationInput.model_validate(payload)
+    from .screening import input_hash
+    if screening.get('status') != 'SCREENED' or screening.get('input_sha256') != input_hash(source):
+        raise RemoteClariFiError('Screening changed; screen and review this input again.')
+    if not model or model != os.environ.get('CLARIFI_REMOTE_MODEL', ''):
+        raise RemoteClariFiError('Cloud model configuration changed; review and approve the draft again.')
+    body = json.dumps({'data': source.model_dump(mode='json'), 'approved': True, 'model': model})
+    if len(body.encode()) > 5 * 1024 * 1024:
+        raise ValueError('Investigation exceeds 5 MiB; narrow the scope')
+    report = _request('POST', '/drafts', content=body.encode())
+    if (not isinstance(report, dict) or report.get('status') != 'COMPLETED'
+            or report.get('agent') != 'clarifi' or report.get('case_id') != source.case_id
+            or report.get('input_sha256') != input_hash(source)
+            or report.get('findings') != screening['findings']
+            or report.get('provenance', {}).get('workflow') != 'scores_first'
+            or report.get('provenance', {}).get('model') != model
+            or report.get('provenance', {}).get('ai_used') is not True
+            or not isinstance(report.get('evidence_uri'), str) or not report['evidence_uri'].startswith('gs://')):
+        raise RemoteClariFiError('AI draft does not match the reviewed screening, model or evidence contract.')
+    # Keep the local screening lineage, independently of server recomputation.
+    report['provenance']['screening_id'] = screening['investigation_id']
+    return report

@@ -35,6 +35,52 @@ Artifact Tool runtime. The Excel reader accepts text-entry apostrophes on ISO
 timestamps and worksheets without declared dimensions, while retaining row,
 column, decompression, formula and timezone validation.
 
+## Scores first and optional AI drafting
+
+The default **Show scores first** flow computes and verifies the selected financial
+checks without calling an LLM, saves an evidence bundle with status `SCREENED`, and
+shows the review queue immediately. **Generate AI analyst draft** requires a second,
+model-specific approval. It calls Gemini or local Gemma only for explanations,
+checks complete finding coverage and citations, and saves a separate `COMPLETED`
+bundle. Draft failure or quota exhaustion leaves the saved screening available.
+Changing source data requires new screening approval; changing models requires new
+draft approval. Scores are heuristic triage scores, not calibrated probabilities.
+The original planning → tools → verification → draft graph remains available under
+**Wait for the full AI report**.
+
+In **Prepare with Migration**, exact valid JSON/Excel/CSV contracts can explicitly
+skip mapping and conversion. All supplied tables, identifiers, timestamps and
+cross-table references must pass the same financial schema. Arbitrary or ambiguous
+headers still require reviewed migration mappings. Financial tools in either
+prepared path continue to run in the shared Docker sandbox. Existing approved
+mappings remain reusable within their saved preparation; changed source contracts
+need a new preparation and review.
+
+Financial preparation offers an explicit **Gemini Flash-Lite** mapping option.
+Only that financial workflow sends metadata and masked profile samples to the
+hosted model. The general Migration Studio keeps its existing local model policy.
+Every proposed mapping still needs approval, and generated conversions run in
+Docker. PDFs still require extraction into structured tables before this flow.
+
+For hosted financial drafting, set `CLARIFI_DEFAULT_PROVIDER=gemini` and configure
+`GEMINI_API_KEY` in the ignored local environment, or set
+`CLARIFI_GEMINI_SECRET_VERSION=projects/PROJECT_ID/secrets/SECRET/versions/1` on GCP.
+The latter uses application identity with access to that one secret, caches the
+pinned version in process memory and never writes its value to reports. A changed
+secret version requires configuration update/restart. `CLARIFI_API_MODEL` selects
+the hosted model. Free-tier quotas still apply; there is no automatic paid-model
+or local fallback. An optional authenticated private API supports `POST /drafts`
+in addition to the existing full `POST /investigations` endpoint.
+
+Deployment acceptance on the existing CPU VM (five synthetic findings): direct
+verified screening **2.12 seconds**, then hosted Gemini draft **3.66 seconds**.
+Docker screening, including container startup, took **12.24 seconds**; a nine-field
+hosted financial mapping proposal took **2.51 seconds**. These are measured
+single-run timings, not a latency guarantee or an accuracy test.
+The public Cloud Run gateway and VM/Docker architecture remain unchanged. The VM
+can call Gemini directly using Secret Manager; it does not depend on the separate
+private ClariFi Cloud Run endpoint for this path.
+
 ## How the agent fits
 
 ```mermaid

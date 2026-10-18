@@ -83,3 +83,16 @@ def test_local_draft_schema_rejects_omissions_and_foreign_citations(isolated_con
     monkeypatch.setattr(reasoner, '_generate', generate)
     with pytest.raises(ValidationError):
         reasoner.summarize({'findings': [{'finding_id': 'shell:C1', 'evidence_ids': ['entities:C1']}]})
+
+
+def test_secret_manager_requires_pinned_resource_and_redacts_errors(monkeypatch):
+    import pytest
+    from workbench.agents.clarifi.models import _secret_manager_key, _cached_secret_key
+    _cached_secret_key.cache_clear()
+    with pytest.raises(ValueError, match='pinned'):
+        _secret_manager_key('https://untrusted.example/key')
+    monkeypatch.setattr('google.auth.default', lambda **kwargs: (_ for _ in ()).throw(RuntimeError('sensitive credential')))
+    with pytest.raises(ValueError) as error:
+        _secret_manager_key('projects/fixture-project/secrets/gemini/versions/1')
+    assert 'sensitive credential' not in str(error.value)
+    _cached_secret_key.cache_clear()

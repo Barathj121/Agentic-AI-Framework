@@ -6,3 +6,6 @@
 !workbench/**
 **/__pycache__
 **/*.pyc
+
+# Temporary GitHub OIDC credential file; never package it.
+gha-creds-*.json

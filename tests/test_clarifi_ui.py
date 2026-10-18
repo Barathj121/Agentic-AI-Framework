@@ -14,6 +14,7 @@ def financial_ui(tmp_path, monkeypatch):
     import streamlit as st
     from workbench.service import Service
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "workspaces"))
+    monkeypatch.setenv("CLARIFI_DEFAULT_PROVIDER", "local")
     monkeypatch.setattr(Service, "diagnostics", lambda self: {})
     monkeypatch.setattr("ui.clarifi.local_model_inventory", lambda base_url: ["gemma3:4b", "gemma4:12b-it-qat"])
     st.cache_resource.clear()
@@ -25,6 +26,7 @@ def open_ui():
     from streamlit.testing.v1 import AppTest
     app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=30)
     app.session_state["page"] = "ClariFi Agent"
+    app.session_state["clarifi_delivery_mode"] = "Wait for the full AI report"
     return app.run()
 
 

@@ -11,6 +11,8 @@ Gemini 3.5 Flash-Lite is the default API model. The existing local workflow rema
 explainable triage rules and require independent accuracy evaluation.
 
 **Full Google Cloud deployment:** [deployment guide](docs/GCP-DEPLOYMENT.md)
+
+**Main-triggered and manual updates:** [deployment trigger and authentication setup](docs/MAIN-DEPLOYMENT.md).
 prepares the complete workbench on Compute Engine with Docker/Gemma and an
 authenticated ClariFi service on Cloud Run. This preserves Docker-dependent
 migration and application workflows; actual GCP execution still needs verification.

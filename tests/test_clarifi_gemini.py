@@ -124,3 +124,19 @@ def test_gemini_provider_provenance_contains_no_credentials(monkeypatch):
     assert report["provenance"]["ai_used"]
     assert report["provenance"]["reasoning_provider"] == "gemini_api"
     assert "fixture-secret" not in json.dumps(report)
+
+
+def test_financial_mapping_decoder_relaxes_array_bounds_but_local_validation_keeps_them(monkeypatch):
+    from pydantic import Field, ValidationError, create_model
+    schema = create_model('FinancialMappingPlan', items=(list[str], Field(min_length=1, max_length=2)))
+    monkeypatch.setattr('workbench.agents.clarifi.models.gemini_api_config', lambda: {'key': 'fixture-secret', 'model': 'fixture-gemini'})
+    captured = []
+    def interaction(self, body):
+        captured.append(body)
+        return {'status': 'completed', 'output_text': '{"items":["a","b","c"]}'}
+    monkeypatch.setattr(GeminiAPIReasoner, '_interaction', interaction)
+    with pytest.raises(ValidationError):
+        GeminiAPIReasoner()._generate(schema, 'Use only reviewed mappings', {})
+    items = captured[0]['response_format']['schema']['properties']['items']
+    assert 'maxItems' not in items and 'minItems' not in items
+    assert schema.model_json_schema()['properties']['items']['maxItems'] == 2

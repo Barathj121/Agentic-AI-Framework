@@ -207,7 +207,11 @@ class FinancialPreparation:
 
     def propose(self, identifier, table):
         item = self.state(identifier)["tables"][table]
-        return self.migration(identifier).propose(item["workspace_id"], exact_targets=True)
+        plan = self.migration(identifier).propose(item["workspace_id"], exact_targets=True)
+        if self.llm is not None:
+            self.manager.write(self.workspace(identifier), "metadata/mapping_model_" + table + ".json",
+                               {"provider": type(self.llm).__name__, "model": getattr(self.llm, "model", None)})
+        return plan
 
     def create(self, case_id, instruction, tool, sources, assignments):
         if not requests_clarifi(instruction):
@@ -328,3 +332,14 @@ class FinancialPreparation:
             except Exception:
                 self.manager.status(workspace, "INVESTIGATION_FAILED")
                 raise
+
+
+def canonical_input(sources, assignments, *, case_id, tool):
+    """Accept only an exact existing contract, without generated mappings or guessed values."""
+    if set(assignments) != {item.key for item in sources}:
+        raise IntakeError("Assign every source table before checking the ClariFi format")
+    selected = list(assignments.values())
+    if len(selected) != len(set(selected)) or not set(selected) <= set(TOOL_TABLES[tool]):
+        raise IntakeError("Each evidence table must be supplied once within the selected capability")
+    tables = {assignments[item.key]: read_csv_bytes(item.content) for item in sources}
+    return validate_scope(InvestigationInput.model_validate({"case_id": case_id, **tables}), tool)
