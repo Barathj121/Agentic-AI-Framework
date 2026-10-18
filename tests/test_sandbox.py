@@ -10,7 +10,7 @@ import duckdb
 import pytest
 
 from workbench.data import ingest_csv
-from workbench.sandbox import MAX_LOG_BYTES, SandboxManager, _copy_stream, _raw_digest
+from workbench.sandbox import sandbox_identity, MAX_LOG_BYTES, SandboxManager, _copy_stream, _raw_digest
 from workbench.schemas import BuildResult, ExecutionResult, GeneratedFile, OutputSpec
 from workbench.settings import Settings
 from workbench.workspace import WorkspaceManager
@@ -35,7 +35,7 @@ def test_docker_command_restricts_mounts_and_privileges(sandbox_workspace, tmp_p
     workspace, settings = sandbox_workspace
     command = SandboxManager(settings)._command(workspace, tmp_path / "contract", "adw-test", "execute")
     assert command[:2] == ["docker", "run"]
-    for option, value in (("--network", "none"), ("--user", "10001:10001"), ("--cap-drop", "ALL"),
+    for option, value in (("--network", "none"), ("--user", sandbox_identity()), ("--cap-drop", "ALL"),
                           ("--security-opt", "no-new-privileges:true"), ("--pids-limit", "128")):
         assert command[command.index(option) + 1] == value
     assert "--read-only" in command and "--privileged" not in command
@@ -236,3 +236,13 @@ def test_docker_raw_changes_fail_and_restore(sandbox_workspace):
     result = _live_manager(settings).execute(workspace, build_code(workspace, source), 1)
     assert not result.success and "restored" in result.error
     assert _raw_digest(workspace / "database/workspace.duckdb") == before
+
+
+def test_linux_sandbox_preserves_nonroot_output_ownership(monkeypatch):
+    import workbench.sandbox as module
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.setattr(module.os, "getuid", lambda: 999)
+    monkeypatch.setattr(module.os, "getgid", lambda: 994)
+    assert module.sandbox_identity() == "999:994"
+    monkeypatch.setattr(module.os, "getuid", lambda: 0)
+    assert module.sandbox_identity() == "10001:10001"

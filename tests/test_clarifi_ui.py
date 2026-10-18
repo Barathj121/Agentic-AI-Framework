@@ -15,6 +15,7 @@ def financial_ui(tmp_path, monkeypatch):
     from workbench.service import Service
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "workspaces"))
     monkeypatch.setattr(Service, "diagnostics", lambda self: {})
+    monkeypatch.setattr("ui.clarifi.local_model_inventory", lambda base_url: ["gemma3:4b", "gemma4:12b-it-qat"])
     st.cache_resource.clear()
     yield tmp_path
     st.cache_resource.clear()
@@ -250,3 +251,110 @@ def test_input_validation_identifies_row_and_field_without_cell_values():
 def test_unknown_reader_errors_do_not_echo_source_or_credentials():
     from ui.clarifi import input_error_message
     assert "fixture-secret" not in input_error_message(RuntimeError("fixture-secret"))
+
+
+def test_priority_filter_requires_evidence_disposition_and_score_boundary():
+    from ui.clarifi import findings_for_display
+    findings = [{'finding_id': str(index), 'score': score, 'disposition': disposition}
+                for index, (score, disposition) in enumerate([(95, 'identity_review'), (79, 'analyst_review'),
+                                                            (80, 'analyst_review'), (100, 'routine_review'),
+                                                            (95, 'analyst_review')])]
+    report = {'findings': findings}
+    assert [item['finding_id'] for item in findings_for_display(report)] == ['4', '2']
+    assert len(findings_for_display(report, high_priority=False)) == 5
+    assert len(report['findings']) == 5
+
+
+def test_priority_ui_can_reveal_all_findings_without_rerunning_agent(financial_ui):
+    app = open_ui()
+    next(item for item in app.radio if item.label == 'Investigation data').set_value('Synthetic example').run()
+    next(item for item in app.selectbox if item.label == 'Reasoning model').set_value('Offline rules demo').run()
+    app.checkbox[0].check().run()
+    next(item for item in app.button if item.label == 'Run Investigation').click().run()
+    assert not app.exception
+    initial = next(item for item in app.metric if item.label == 'Findings').value
+    next(item for item in app.radio if item.label == 'Findings to display').set_value('All findings').run()
+    assert not app.exception
+    expanded = next(item for item in app.metric if item.label == 'Findings').value
+    assert int(expanded) > int(initial)
+    assert len(list((financial_ui / 'workspaces/clarifi').glob('*.json'))) == 1
+
+
+def test_empty_priority_view_is_valid_and_keeps_report_available(financial_ui, monkeypatch):
+    from workbench.service import Service
+    def investigate(self, agent, payload, **kwargs):
+        report = ClariFiAgent(mode='rules').run(payload, approved=True)
+        for finding in report['findings']:
+            finding['score'] = 20
+            finding['disposition'] = 'identity_review'
+        return report
+    monkeypatch.setattr(Service, 'run_agent', investigate)
+    app = open_ui()
+    next(item for item in app.selectbox if item.label == 'Reasoning model').set_value('Offline rules demo').run()
+    app.checkbox[0].check().run()
+    next(item for item in app.button if item.label == 'Run Investigation').click().run()
+    assert not app.exception
+    assert next(item for item in app.metric if item.label == 'Findings').value == '0'
+    assert any('No findings meet' in item.value for item in app.info)
+    assert any(item.label == 'Download investigation report' for item in app.get('download_button'))
+
+
+def test_focused_excel_and_json_have_same_verified_rules_baseline():
+    from workbench.agents.clarifi.ingest import focused_input, read_excel_bytes
+    from workbench.agents.clarifi.schemas import InvestigationInput
+    data = focused_input('combined')
+    path = Path(__file__).resolve().parents[1] / 'examples/clarifi/focused_review.xlsx'
+    excel = InvestigationInput.model_validate({'case_id': data.case_id, **read_excel_bytes(path.read_bytes(), 'combined')})
+    assert excel == data
+    from workbench.agents.clarifi.preparation import read_sources
+    from workbench.agents.clarifi.ingest import read_csv_bytes
+    sources = read_sources([(path.name, path.read_bytes())])
+    normalized = {item.label: read_csv_bytes(item.content) for item in sources}
+    prepared = InvestigationInput.model_validate({'case_id': data.case_id, **normalized})
+    assert prepared == data
+    report = ClariFiAgent(mode='rules').run(data, approved=True)
+    assert len(report['findings']) == 5
+    assert [finding['score'] for finding in report['findings']] == [95, 95, 80, 80, 80]
+    assert all(finding['disposition'] == 'analyst_review' for finding in report['findings'])
+
+
+def test_cloud_ui_offers_explicit_local_gemma_without_silent_fallback(financial_ui, monkeypatch):
+    monkeypatch.setenv("CLARIFI_API_URL", "https://clarifi-test.run.app")
+    monkeypatch.setenv("CLARIFI_REMOTE_MODEL", "gemini-cloud-test")
+    monkeypatch.setenv("CLARIFI_ENABLE_LOCAL", "true")
+    app = open_ui()
+    assert not app.exception
+    service = next(item for item in app.selectbox if item.label == "Reasoning service")
+    assert service.value == "Gemma on this GCP VM"
+    assert any(item.label == "Check local model" for item in app.button)
+    service.set_value("Gemini · private Cloud Run").run()
+    assert not app.exception
+    assert any(item.label == "Check cloud service" for item in app.button)
+    assert not any(item.label == "Check local model" for item in app.button)
+    assert next(item for item in app.button if item.label == "Run Investigation").disabled
+
+
+def test_model_availability_does_not_claim_inference_is_ready(financial_ui, monkeypatch):
+    monkeypatch.delenv('CLARIFI_API_URL', raising=False)
+    monkeypatch.setattr('workbench.agents.clarifi.models.LocalReasoner.health',
+                        lambda self: {'available': True, 'model_available': True, 'generation_timeout_seconds': 600})
+    app = open_ui()
+    next(item for item in app.button if item.label == 'Check local model').click().run()
+    assert not app.exception
+    assert any('Model available' in item.value for item in app.success)
+    assert any('Availability check only' in item.value for item in app.caption)
+    assert any('600 seconds' in item.value for item in app.caption)
+    assert next(item for item in app.button if item.label == 'Run Investigation').disabled
+
+
+def test_installed_gemma4_is_selectable_and_requires_new_approval(financial_ui, monkeypatch):
+    monkeypatch.delenv('CLARIFI_API_URL', raising=False)
+    app = open_ui()
+    picker = next(item for item in app.selectbox if item.label == 'Local model ID')
+    assert any('gemma4:12b-it-qat' in value for value in picker.options)
+    app.checkbox[0].check().run()
+    picker.set_value('gemma4:12b-it-qat').run()
+    assert not app.exception
+    assert next(item for item in app.button if item.label == 'Run Investigation').disabled
+    assert not any('Gemma 4 12B is available for testing' in item.value for item in app.warning)
+    assert not app.metric

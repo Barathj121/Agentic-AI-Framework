@@ -57,7 +57,7 @@ with open(os.environ["CURL_CALLS"], "a") as stream:
            "PROJECT_ID": "test-project", "REGION": "us-central1", "ZONE": "us-central1-a",
            "PREFIX": "test-workbench", "TAG": "test-build", "CLARIFI_MODE": "gemini",
            "CLARIFI_API_MODEL": "gemini-test", "CLARIFI_API_KEY_SECRET": "test-secret:1",
-           "CLARIFI_EVIDENCE_BUCKET": "test-evidence-bucket", "OLLAMA_IMAGE": "ollama/ollama:test-release"}
+           "CLARIFI_EVIDENCE_BUCKET": "test-evidence-bucket", "OLLAMA_IMAGE": "ollama/ollama:test-release", "CLARIFI_LOCAL_MODEL": "gemma4:12b-it-qat"}
     result = subprocess.run(["bash", "deploy/gcp/deploy.sh"], cwd=ROOT, env=env,
                             text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -84,6 +84,7 @@ with open(os.environ["CURL_CALLS"], "a") as stream:
     assert "--allow=tcp:8080" in internal
     assert not any("0.0.0.0/0" in part for call in calls for part in call)
     bootstrap = next(call for call in calls if call[:2] == ["compute", "ssh"])
+    assert any("CLARIFI_LOCAL_MODEL='gemma4:12b-it-qat'" in part for part in bootstrap)
     assert "--tunnel-through-iap" in bootstrap
     assert any("CLARIFI_REMOTE_MODEL='gemini-test'" in part for part in bootstrap)
     assert any("PUBLIC_HOST='test-123.us-central1.run.app'" in part for part in bootstrap)

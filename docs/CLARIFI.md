@@ -443,3 +443,137 @@ Mocked Vertex responses verify the adapter contract, not Vertex model availabili
 quality. Live Vertex, GCS permissions, the Linux container build and an authenticated
 Cloud Run deployment require project access and separate verification. No deployment
 or measured 80–90% accuracy is implied by source or unit tests.
+
+## Local migration → sandboxed ClariFi
+
+The optional **Prepare with Migration** path reuses `MigrationService` and the
+workbench Docker sandbox. The existing direct-input ClariFi and Migration Studio
+flows remain available.
+
+1. Open **New workspace**, upload financial files, and include **use ClariFi agent**
+   in the instruction. The request opens financial preparation rather than the
+   general code-generation workflow. Alternatively, choose **ClariFi Agent →
+   Prepare with Migration** directly.
+2. Choose insider trading, shell-company networks, or the combined scope. Upload
+   CSV files, an Excel workbook, or JSON tables, at most 5 MiB combined. Assign
+   each file/sheet/table to an evidence table. Required tables must occur once;
+   combine split exports for the same table before uploading. Empty optional
+   JSON arrays/worksheets are omitted. PDF extraction is not implemented here.
+3. Request a mapping proposal for each table. The existing local mapping model
+   proposes field correspondences. Review and edit the mappings, resolve
+   ambiguity, then explicitly approve each plan. No model-generated transformation
+   executes on the host. Financial proposals use a keyed response contract that
+   requires every target field and restricts source columns to the actual table.
+   The existing structured client permits at most three schema attempts. A source
+   identifier proposed for multiple identifier roles is marked ambiguous until
+   the reviewer resolves it; model confidence is not evidence of correctness.
+4. **Convert and validate in sandbox** executes each approved migration using
+   the existing Docker lifecycle. It preserves record counts and keeps financial
+   source text, identifiers, and timezone offsets until an approved conversion
+   changes them. The assembled bundle must pass the ClariFi schema, unique-ID,
+   positive-value and cross-table-reference checks. The CSV handoff is also
+   compared with the independently validated materialized database table. Incomplete output blocks
+   investigation; absent relationships and evidence are not invented.
+5. Review the converted records and download the prepared JSON if needed. Choose
+   the ClariFi reasoning model and explicitly approve the investigation. Financial
+   rules and ML tools execute in a fresh Docker container using the same network,
+   capability, memory, CPU, timeout and cleanup controls as migration. Model
+   planning/explanation runs in the application process, outside the container;
+   the sandbox receives neither credentials nor network access. Direct-input
+   investigations retain their existing in-process execution behavior.
+
+This path requires a **rebuilt sandbox image**, even when the old migration image
+is already installed:
+
+```bash
+docker build -t agentic-workbench-sandbox:latest -f sandbox/Dockerfile .
+python -m streamlit run app.py --server.port 8510
+```
+
+The image now includes Pydantic plus only the reviewed ClariFi schemas/tools.
+Docker failures stop execution; there is no host-execution fallback. The prepared
+path uses a local orchestrator with Docker access, even if `CLARIFI_API_URL` is set
+for the separate direct-input cloud mode. Its model picker therefore offers local
+Gemma, Gemini API, Vertex Gemini and explicit rules-only mode, rather than the
+remote ClariFi API. Mapping proposals still use the configured workbench local
+model. Rules-only mode does not invoke an AI model for investigation.
+
+Preparations are stored under
+`WORKSPACE_ROOT/clarifi-pipelines/<workspace>/`. Each has isolated migration child
+workspaces, source file hashes, approved mappings, converted-output hashes,
+financial validation and an investigation report. Changing prepared data, mapping
+approval or a converted output invalidates the handoff. Reopen a preparation from
+**Resume a financial preparation**. To change an approved mapping or source file,
+create a new preparation; approval remains immutable for that run.
+
+Checks:
+
+```bash
+python -m pytest tests/test_clarifi_preparation.py tests/test_clarifi_preparation_ui.py -m 'not docker'
+RUN_DOCKER_TESTS=1 python -m pytest tests/test_clarifi_preparation.py -m docker
+```
+
+Unit/UI tests use explicit model and execution fakes. Only the Docker-marked tests
+exercise real container isolation and migration-to-investigation execution; model
+quality and production throughput require separate measurement. No GCP resource
+or deployment change is required for this local integration.
+
+### Gemma 4 deployment option
+
+The official Ollama tag for the requested 12B instruction-tuned QAT model is
+`gemma4:12b-it-qat` (not `gemma4-12b-iat`). Install it with
+`ollama pull gemma4:12b-it-qat` and select that exact local model ID. The Ollama
+adapter explicitly sends `think=false` for this Gemma 4 family to reserve the
+bounded time/output budget for the validated JSON answer; older models retain
+their original request settings. Schema, evidence and score validation still
+apply, and there is no automatic model fallback.
+
+The GCP installer accepts a separate `CLARIFI_LOCAL_MODEL` setting while
+`OLLAMA_MODEL` controls Migration Studio and the general workbench. It downloads
+both models when these settings differ. Benchmark a full investigation on the
+actual hardware before changing its default; a model download or simple JSON
+check alone does not establish useful latency or investigation quality.
+
+Sources: [Ollama Gemma 4 12B QAT](https://ollama.com/library/gemma4:12b-it-qat),
+[Ollama thinking controls](https://docs.ollama.com/capabilities/thinking).
+
+### Local model timeouts and availability checks
+
+ClariFi no longer hardcodes a 180-second model request deadline. Set
+`CLARIFI_LLM_TIMEOUT_SECONDS=600` in the ignored local `.env` or server environment.
+This takes precedence over `LLM_TIMEOUT_SECONDS`; if neither is configured, ClariFi
+uses 600 seconds. The deadline applies to each model request, not the complete
+investigation, and does not guarantee that an arbitrary workload will finish.
+The GCP bootstrap explicitly configures ClariFi to 600 seconds. Restart cloud UI
+services after server environment changes; rerun the local Streamlit app after
+source changes.
+
+“Model available” confirms the model is installed and Ollama responds. It does
+not execute a full planning/draft check. The UI displays the effective model
+request timeout after the availability check. A timeout returns no completed
+investigation; no model or rules fallback runs automatically.
+
+For local Gemma, analyst drafts now use batches of at most five findings. Each
+batch uses required finding-ID keys and evidence IDs constrained to that finding.
+The agent still verifies exact coverage and citations before reporting success.
+The full computed findings stay intact; at most 25 receive model explanations.
+A 25-finding local draft therefore needs five draft requests plus planning,
+before any bounded schema-repair requests. Gemini's existing request flow is
+unchanged. This limits per-request work; it is not a guarantee of lower total
+latency or semantic accuracy.
+
+### Installed models and visible investigation stages
+
+The local model picker lists the tags actually installed on the application
+server through Ollama, cached for 30 seconds. Use **Refresh installed models**
+after downloading a model, or choose manual entry for an exact ID. On the GCP
+VM, `gemma3:4b` and `gemma4:12b-it-qat` are installed. The latter is marked
+experimental on CPU, remains opt-in, and requires fresh investigation approval.
+A model installed on the VM is not automatically installed on a local laptop.
+
+The direct financial investigation UI now streams planning, tool execution,
+evidence verification, and draft-batch events. LangGraph custom events are
+consumed on the UI caller thread; request-scoped listeners reset on completion
+or failure. Progress is descriptive, not a fabricated completion percentage or
+latency promise. Computed outputs, evidence checks and approval rules remain
+unchanged. The remote Gemini HTTP handoff does not expose internal stage events.

@@ -119,16 +119,35 @@ def profile_panel(service: Service, workspace: Path) -> None:
 
 def new_workspace(service: Service, workspace: Path | None) -> None:
     st.header("Start with your data")
-    st.write("Upload a CSV and describe the outcome you need. Review the dataset, compare proposed approaches, then approve an implementation.")
+    st.write('Upload data and describe the outcome you need. Include “use ClariFi agent” to prepare financial records through Migration Studio before investigation. Other workbench tasks use a single CSV.')
     with st.form("workspace_form", clear_on_submit=False):
         name = st.text_input("Workspace name", placeholder="e.g. Customer activity review", max_chars=100)
-        upload = st.file_uploader("Dataset", type=["csv"], max_upload_size=service.settings.max_upload_mb,
+        upload = st.file_uploader("Dataset", type=["csv", "xlsx", "json"], max_upload_size=service.settings.max_upload_mb,
                                   help=f"Maximum {service.settings.max_upload_mb} MB. The original CSV is retained locally.")
+        related = st.file_uploader("Related financial files (ClariFi only)", type=["csv", "xlsx", "json"],
+                                  accept_multiple_files=True, max_upload_size=5, key="clarifi_related_uploads")
         problem = st.text_area("What do you want to solve?", placeholder="Describe the business question, desired outputs, and any constraints.", height=125, max_chars=12000)
         submitted = st.form_submit_button("Create & profile workspace", type="primary", width="stretch")
     if submitted:
-        if not name.strip() or not problem.strip() or upload is None:
+        from workbench.agents.clarifi.preparation import requests_clarifi
+        financial = requests_clarifi(problem)
+        if financial and (upload is not None or related):
+            try:
+                from workbench.agents.clarifi.preparation import read_sources
+                files = [(item.name, item.getvalue()) for item in ([upload] if upload is not None else []) + list(related)]
+                read_sources(files)
+                st.session_state["clarifi_routed_files"] = files
+                st.session_state["clarifi_instruction"] = problem.strip()
+                st.session_state["clarifi_intake_mode"] = "Prepare with Migration"
+                if name.strip():
+                    st.session_state["clarifi_preparation_case"] = re.sub(r"[^A-Za-z0-9_.:-]", "-", name.strip())[:100]
+                navigate("ClariFi Agent")
+            except Exception:
+                st.error("ClariFi accepts CSV, Excel and JSON tables up to 5 MiB combined. Check file contents and use values rather than Excel formulas.")
+        elif not name.strip() or not problem.strip() or upload is None:
             st.error("Add a name, a CSV dataset, and a business problem to create a workspace.")
+        elif not upload.name.lower().endswith(".csv") or related:
+            st.error('General workbench tasks use one CSV. Include “use ClariFi agent” to prepare multiple financial files.')
         else:
             try:
                 with st.spinner("Saving the dataset and profiling it locally…"):

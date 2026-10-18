@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -23,6 +24,15 @@ AVAILABLE_DEPENDENCIES = frozenset({
     "statsmodels", "matplotlib", "plotly", "joblib", "nbformat", "nbclient", "ipykernel",
 })
 MAX_LOG_BYTES = 2 * 1024 * 1024
+
+
+def sandbox_identity() -> str:
+    # Linux bind mounts retain numeric ownership. Match the unprivileged host
+    # service so later inspection/retries can update container-created files.
+    # Root launchers and Docker Desktop retain the isolated fallback UID.
+    if sys.platform == "linux" and os.getuid() != 0 and os.getgid() != 0:
+        return f"{os.getuid()}:{os.getgid()}"
+    return "10001:10001"
 REPORT_MARKER = "WORKBENCH_INSPECTION_JSON="
 
 
@@ -137,7 +147,7 @@ class SandboxManager:
         if not memory:
             raise ValueError("Sandbox memory must be a byte count or integer k/m/g/t size")
         memory_bytes = int(memory[1]) * 1024 ** ("kmgt".index(memory[2]) + 1 if memory[2] else 0)
-        cmd = ["docker", "run", "--name", name, "--network", "none", "--user", "10001:10001",
+        cmd = ["docker", "run", "--name", name, "--network", "none", "--user", sandbox_identity(),
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--read-only",
                "--pids-limit", "128", "--cpus", str(self.settings.sandbox_cpus),
                "--memory", self.settings.sandbox_memory, "--memory-swap", self.settings.sandbox_memory,

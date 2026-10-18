@@ -275,3 +275,9 @@ Deterministic fixtures control model responses; opted-in Docker tests execute re
 Generated code has no sandbox network access and cannot install packages. A GPU/deep-learning runtime is not included by default. Structural checks do not establish business correctness. The UI binds to loopback and has no multi-user authorization. External apps have no persistent volume management, and connector packages have no live external-system integration. Cloud deployment is outside this local MVP.
 
 See [model configuration and reviewed-code debugging](docs/MODELS-AND-DEBUGGING.md) for detailed troubleshooting.
+
+ClariFi also supports a local **Prepare with Migration** flow: supply financial
+CSV/Excel/JSON data and an instruction containing **use ClariFi agent**, review
+Migration Studio mappings, convert in Docker, then approve the sandboxed financial
+investigation. Rebuild the sandbox image before using this new path. See
+[local preparation and investigation](docs/CLARIFI.md#local-migration--sandboxed-clarifi).

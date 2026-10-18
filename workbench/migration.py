@@ -19,7 +19,7 @@ from typing import Literal
 import duckdb
 import sqlglot
 from filelock import FileLock
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator, model_validator
 from sqlglot import exp
 
 from workbench.artifacts import validate_and_register
@@ -361,7 +361,7 @@ class MigrationService:
             raise ValueError('This is not a Migration Studio workspace')
         return workspace
 
-    def create(self, name: str, source_bytes: bytes, target_metadata_bytes: bytes, source_metadata_bytes: bytes | None = None, problem=DEFAULT_PROBLEM) -> Path:
+    def create(self, name: str, source_bytes: bytes, target_metadata_bytes: bytes, source_metadata_bytes: bytes | None = None, problem=DEFAULT_PROBLEM, *, preserve_source_text=False) -> Path:
         target = parse_metadata(target_metadata_bytes)
         # Parse source metadata before creating a workspace; validate correspondence after ingestion.
         provided = parse_metadata(source_metadata_bytes) if source_metadata_bytes is not None else None
@@ -381,7 +381,9 @@ class MigrationService:
             with self._write_database(workspace) as con:
                 for schema in ('source', 'target', 'mapping'):
                     con.execute(f'CREATE SCHEMA IF NOT EXISTS {schema}')
-                con.execute('CREATE TABLE source.data AS SELECT * FROM raw.source')
+                # Financial adapters retain original text (IDs and UTC offsets)
+                # until the human-approved transformation explicitly changes it.
+                con.execute('CREATE TABLE source.data AS SELECT * FROM ' + ('raw.original' if preserve_source_text else 'raw.source'))
                 _metadata_table(con, 'source', source)
                 _metadata_table(con, 'target', target)
             self._baseline(workspace)
@@ -394,7 +396,7 @@ class MigrationService:
         config = self.manager.read(workspace, 'metadata/migration.json')
         return ([MetadataField.model_validate(f) for f in config['source']], [MetadataField.model_validate(f) for f in config['target']])
 
-    def propose(self, identifier) -> MappingPlan:
+    def propose(self, identifier, *, exact_targets=False) -> MappingPlan:
         workspace = self.workspace(identifier)
         with FileLock(str(safe_path(workspace, 'metadata/workflow.lock')), timeout=0):
             if self.manager.read(workspace, 'metadata/mapping_approval.json'):
@@ -416,11 +418,39 @@ class MigrationService:
                       'Keep descriptions concise. No executable code is run at this stage.')
             self.manager.status(workspace, 'MAPPING_RUNNING', error=None)
             try:
+                schema = MappingPlan
+                if exact_targets:
+                    # A keyed response cannot silently omit, duplicate or invent
+                    # financial target fields. The structured client repairs
+                    # schema violations within its existing three-call bound.
+                    decision_fields = {name: (field.annotation, field) for name, field in Mapping.model_fields.items()
+                                       if name not in {'target_column', 'status', 'requires_review'}}
+                    decision_fields['source_columns'] = (list[Literal[tuple(f.column_name for f in source)]], Field(max_length=200))
+                    decision = create_model('FinancialFieldMapping', __config__=ConfigDict(extra='forbid'), **decision_fields)
+                    decisions = create_model('FinancialTargetMappings', __config__=ConfigDict(extra='forbid'),
+                                             **{field.column_name: (decision, ...) for field in target})
+                    schema = create_model('FinancialMappingPlan', __config__=ConfigDict(extra='forbid'),
+                                          mappings=(decisions, ...), observations=(list[str], Field(default_factory=list, max_length=30)))
+                    system += ' Return mappings as an OBJECT keyed by every exact target column, not a list. Each value describes that field; target_column and approval status are supplied by the framework.'
                 with self._model() as client:
                     if hasattr(client, 'bind_workspace'):
                         client.bind_workspace(workspace)
-                    plan = client.structured(MappingPlan, system, json.dumps(payload, default=str))
+                    response = client.structured(schema, system, json.dumps(payload, default=str))
+                plan = (MappingPlan(mappings=[Mapping(target_column=name, **decision) for name, decision in response.mappings.model_dump().items()],
+                                    observations=response.observations) if exact_targets else response)
                 plan = validate_mappings(plan, source, target)
+                if exact_targets:
+                    direct_ids = {}
+                    for mapping in plan.mappings:
+                        if mapping.mapping_type == 'DIRECT' and mapping.target_column.endswith('_id'):
+                            direct_ids.setdefault(mapping.source_columns[0], []).append(mapping)
+                    for candidates in direct_ids.values():
+                        if len(candidates) > 1:
+                            for mapping in candidates:
+                                mapping.mapping_type = 'AMBIGUOUS'
+                                mapping.reason = ('One source identifier is proposed for multiple identifier roles. Confirm each business meaning before approval. ' + mapping.reason)[:3000]
+                            plan.observations.append('Identifier role conflict: ' + ', '.join(mapping.target_column for mapping in candidates))
+                    plan.observations = plan.observations[:30]
                 for mapping in plan.mappings:
                     mapping.status, mapping.requires_review = 'PENDING', True
                 self.manager.write(workspace, 'generated/mapping.json', plan.model_dump())

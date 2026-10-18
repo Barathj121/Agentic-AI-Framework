@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, create_model
 
-from .schemas import Narrative, Plan
+from .schemas import Narrative, Plan, Record
 
 PLAN_INSTRUCTION = (
     "You are the ClariFi BFSI investigation planner. Select all and only available_tools, "
@@ -227,26 +227,46 @@ class LocalReasoner:
     def __init__(self, model=None):
         from workbench.settings import Settings
         self.model = model or os.getenv("CLARIFI_LOCAL_MODEL", "gemma3:1b")
-        # Independent settings preserve the original CSV workflow's model selection.
+        # Read the same ignored local configuration as the app, without changing
+        # the general workbench's model/context selection or process environment.
+        from dotenv import dotenv_values
+        config_path = Path(__file__).resolve().parents[3] / ".env"
+        local = dotenv_values(config_path) if config_path.is_file() else {}
+        def configured(name):
+            return os.environ[name] if name in os.environ else local.get(name)
+        raw_timeout = configured("CLARIFI_LLM_TIMEOUT_SECONDS") or configured("LLM_TIMEOUT_SECONDS") or "600"
+        try:
+            timeout = int(raw_timeout)
+        except (TypeError, ValueError):
+            raise ValueError("CLARIFI_LLM_TIMEOUT_SECONDS (or LLM_TIMEOUT_SECONDS) must be a positive integer") from None
+        if timeout <= 0:
+            raise ValueError("CLARIFI_LLM_TIMEOUT_SECONDS (or LLM_TIMEOUT_SECONDS) must be a positive integer")
         self.settings = Settings(
             ollama_model=self.model,
-            ollama_base_url=os.getenv("CLARIFI_OLLAMA_BASE_URL", "http://localhost:11434"),
+            ollama_base_url=configured("CLARIFI_OLLAMA_BASE_URL") or configured("OLLAMA_BASE_URL") or "http://localhost:11434",
             llm_context_tokens=16384, llm_max_output_tokens=6144,
-            llm_timeout_seconds=180, llm_temperature=0)
+            llm_timeout_seconds=timeout, llm_temperature=0)
 
     def health(self):
         from workbench.llm import OllamaClient
         client = OllamaClient(self.settings)
         try:
-            return client.health()
+            return {**client.health(), "generation_timeout_seconds": self.settings.llm_timeout_seconds}
         finally:
             client.close()
 
     def _generate(self, schema, instruction, context):
-        from workbench.llm import OllamaClient
+        from workbench.llm import LLMError, OllamaClient
         client = OllamaClient(self.settings)
         try:
             return client.structured(schema, instruction, json.dumps(context))
+        except LLMError as error:
+            if "timed out" in str(error).lower():
+                raise LLMError(
+                    f"ClariFi model {self.model} timed out after {self.settings.llm_timeout_seconds}s. "
+                    "Increase CLARIFI_LLM_TIMEOUT_SECONDS or select a smaller installed model. "
+                    "No completed investigation report was saved.") from None
+            raise
         finally:
             client.close()
 
@@ -255,7 +275,36 @@ class LocalReasoner:
         return Plan.model_validate(value.model_dump())
 
     def summarize(self, context):
-        return self._generate(Narrative, DRAFT_INSTRUCTION, context)
+        # Smaller local drafts bound per-request generation and make finding
+        # coverage part of constrained decoding, not just a final rejection.
+        claims, next_steps = [], []
+        findings = context["findings"]
+        for start in range(0, len(findings), 5):
+            batch = findings[start:start + 5]
+            from .progress import draft_progress
+            draft_progress(start // 5 + 1, (len(findings) + 4) // 5)
+            fields = {}
+            for index, item in enumerate(batch):
+                evidence = Literal[tuple(item["evidence_ids"])]
+                claim = create_model(f"LocalDraftClaim{index}", __base__=Record,
+                    explanation=(Annotated[str, Field(min_length=1, max_length=1500)], ...),
+                    evidence_ids=(Annotated[list[evidence], Field(min_length=1, max_length=20)], ...))
+                fields[item["finding_id"]] = (claim, ...)
+            claim_map = create_model("LocalDraftFindings", __base__=Record, **fields)
+            schema = create_model("LocalDraftBatch", __base__=Record, claims=(claim_map, ...),
+                next_steps=(Annotated[list[Annotated[str, Field(max_length=500)]], Field(max_length=2)], ...))
+            packet = {**context, "findings": batch, "drafted_findings": len(batch),
+                      "total_drafted_findings": len(findings)}
+            instruction = DRAFT_INSTRUCTION + (
+                " Return claims as an object keyed by each exact finding_id in this batch. "
+                "Each value contains only explanation and evidence_ids. Cover every required key. "
+                "Return at most two concise analyst follow-up steps for this batch.")
+            result = self._generate(schema, instruction, packet).model_dump()
+            claims.extend({"finding_id": item["finding_id"], **result["claims"][item["finding_id"]]} for item in batch)
+            for step in result["next_steps"]:
+                if step not in next_steps:
+                    next_steps.append(step)
+        return Narrative(claims=claims, next_steps=next_steps[:10])
 
 
 class RulesReasoner:

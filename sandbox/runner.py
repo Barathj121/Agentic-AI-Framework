@@ -168,6 +168,31 @@ def model_metadata(target, report):
     Path(report).write_text(json.dumps(metadata), encoding="utf-8")
 
 
+def clarifi_tools(contract):
+    """Only image-bundled financial tools; no generated code or model credentials."""
+    import hashlib
+    import time
+    sys.path.insert(0, "/opt/workbench")
+    from clarifi_runtime.schemas import InvestigationInput
+    from clarifi_runtime.tools import TOOLS
+    content = safe_file("input/clarifi.json").read_bytes()
+    source = InvestigationInput.model_validate_json(content)
+    selected = contract["tools"]
+    if len(set(selected)) != len(selected) or set(selected) != set(source.tools):
+        raise ValueError("Select each available reviewed financial tool exactly once")
+    findings, trace = [], []
+    for tool in selected:
+        started = time.monotonic()
+        findings.extend(TOOLS[tool](source))
+        if len(findings) > 2000:
+            raise ValueError("Too many identity candidates; narrow the scope")
+        trace.append({"stage": "tool", "tool": tool, "execution": "docker_sandbox",
+                      "duration_seconds": round(time.monotonic() - started, 4)})
+    output = {"input_sha256": hashlib.sha256(content).hexdigest(), "tools": selected,
+              "findings": [item.model_dump(mode="json") for item in findings], "trace": trace}
+    safe_file("results/clarifi-tools.json").write_text(json.dumps(output, allow_nan=False), encoding="utf-8")
+
+
 if __name__ == "__main__":
     # Some WSL kernels cannot cap cgroup swap. Also enforce an inherited hard address-space
     # ceiling per process; generated children cannot raise it without CAP_SYS_RESOURCE.
@@ -182,5 +207,7 @@ if __name__ == "__main__":
         inspect(contract)
     elif sys.argv[1] == "execute":
         raise SystemExit(execute(contract))
+    elif sys.argv[1] == "clarifi_tools":
+        clarifi_tools(contract)
     else:
         raise SystemExit("Unknown runner mode")

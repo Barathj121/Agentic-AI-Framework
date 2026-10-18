@@ -7,10 +7,16 @@ tagged gateway can reach the VM's internal application proxy.
 
 This deployment keeps Home, Migration Studio, Data Workbench, workspace history,
 results and external Docker applications together on a Compute Engine VM. The
-ClariFi screen calls the private ClariFi Cloud Run service using the VM's service
-identity. Both investigation capabilities execute in Cloud Run and persist their
-input/report bundles in private Cloud Storage. The UI also retains its existing
-reopenable report copies on the VM disk.
+ready-to-use ClariFi screen offers an explicit choice between Gemma on the VM
+and Gemini in the private ClariFi Cloud Run service. Gemma is the default when
+`CLARIFI_ENABLE_LOCAL=true`; it keeps reasoning and saved reports on the VM.
+The Gemini choice uses the VM service identity and persists completed input/report
+bundles in private Cloud Storage. A remote failure never silently selects Gemma.
+
+The newer **Prepare with Migration** path uses the VM's shared Docker sandbox
+for both conversion and financial tools. Its local orchestrator runs model calls
+outside Docker and saves the migration audit trail/report on the VM disk. This
+path does not delegate investigation to the private ClariFi Cloud Run API.
 
 This is a prepared **public hackathon prototype deployment**, not a verified cloud
 installation or a production multi-tenant service. VM/cloud integration and model latency
@@ -18,6 +24,32 @@ must pass the checks below in the actual project. The supplied hackathon wording
 requires Cloud Run or Firebase; here the financial investigation engine genuinely
 runs on Cloud Run, while Docker-dependent workflows run on Compute Engine. The
 public HTTPS entrypoint also runs on Cloud Run; Streamlit itself runs on the VM.
+
+### Requirement review (18 October 2026)
+
+- The [published requirements](https://aibuildercup.com/themes.html) require
+  Google AI models (Gemini/Gemma) **or** an agentic platform, and deployment via
+  Cloud Run or Firebase. A VM-only link or a local port-forward is insufficient
+  under that wording.
+- At [08:09](https://www.youtube.com/watch?v=_75UeGNj1GY&t=489s) in the expert
+  session, Cloud Run/Firebase deployment is stated as mandatory. At
+  [24:42–25:33](https://www.youtube.com/watch?v=_75UeGNj1GY&t=1482s), supporting
+  services elsewhere are allowed, but the URL judges click must be Cloud Run
+  deployed. This supports a hybrid deployment; the speaker does not explicitly
+  approve a proxy-only Nginx entrypoint.
+- At [13:20](https://www.youtube.com/watch?v=_75UeGNj1GY&t=800s), the speaker also
+  says to use Agent Platform. This is stronger than the published model-or-platform
+  wording. This repository uses ADK plus Gemini/Gemma, not a verified integration
+  with the managed Agent Platform runtime or Memory Bank. Do not claim otherwise;
+  clarify this difference with the organizers before asserting full compliance.
+- The [published timeline](https://aibuildercup.com/) lists evaluation as
+  **19 October–6 November 2026**, with results on 7 November. The video requires
+  the prototype and dependent services to remain functional throughout judging.
+  An always-reachable gateway pointing at a stopped VM does not meet that goal.
+
+The configuration is prepared, not proof of a working deployment. Complete the
+cloud checks below and demonstrate a real Gemini/Gemma investigation before
+submitting. Offline rules reports are for testing, not the AI submission demo.
 
 ```mermaid
 flowchart LR
@@ -234,7 +266,9 @@ after the event; retained disks continue to cost money. No cleanup script delete
 financial evidence automatically. Consider disk snapshots and an evidence
 retention policy before using business data.
 
-Cloud UI mode intentionally uses the configured deployed model. To change it,
+With `CLARIFI_ENABLE_LOCAL=true`, cloud visitors can explicitly choose Gemma on
+the VM or the private Gemini service. The Gemini choice intentionally uses the
+configured deployed model. To change it,
 redeploy the API with the new model and update `CLARIFI_REMOTE_MODEL` in
 `/etc/agentic-workbench.env`, then restart the UI. A mismatch fails before
 investigation execution. Local deployments retain the original model picker.
@@ -248,3 +282,76 @@ investigation execution. Local deployments retain the original model picker.
 - [Direct VPC egress](https://docs.cloud.google.com/run/docs/configuring/vpc-direct-vpc)
 - [Cloud Run WebSockets](https://docs.cloud.google.com/run/docs/triggering/websockets)
 - [Cloud Run request limits](https://docs.cloud.google.com/run/quotas)
+
+## Cloud verification checkpoint (18 October 2026)
+
+The public Cloud Run gateway and VM installation were exercised in the trial
+project: anonymous UI and external-demo routes returned HTTP 200, the browser
+rendered Home and ClariFi, Google ADK completed real Gemma 3 4B structured
+inference, and all 20 real Docker integration tests passed. These tests cover
+migration, sandboxed financial tools, general execution and cleanup. They do
+not establish detection accuracy or prove every model-generated mapping correct.
+
+The private Gemini service is deployed and reports Ready, but authenticated
+requests from the VM and Google's authenticated proxy return Google HTTP 404
+before application request logs appear. Its end-to-end investigation and GCS
+persistence remain unverified. Keep it private; do not describe that route as
+working until an authenticated investigation passes. Gemma is an explicit
+independent choice, not an automatic fallback. Trial billing was not upgraded.
+
+Linux sandbox execution now matches the non-root service UID/GID so output files
+remain usable for subsequent validation and retries; root launchers retain the
+non-root 10001 fallback. The metadata HTTP/HTTPS block preserves Google's DNS
+traffic to the same address. Docker's local logging driver retains two small
+rotated files because a single file conflicts with compression on Debian Docker.
+
+### Gemma 4 CPU benchmark (18 October 2026)
+
+Installed the official `gemma4:12b-it-qat` model (7.2 GB download) on the existing
+8-vCPU/32-GiB VM without adding GPU or changing machine size. Real ADK structured
+inference passed in 84.25 seconds. With thinking explicitly disabled, a synthetic
+combined ClariFi investigation completed planning and real Docker financial tools,
+but the analyst draft exceeded the existing 180-second request timeout. No
+completed report or accuracy result is claimed. Gemma 3 4B remains the deployed
+default; Gemma 4 is available by explicitly selecting its local model ID.
+
+The installer now accepts independent `CLARIFI_LOCAL_MODEL` and `OLLAMA_MODEL`
+settings. This permits a reviewed ClariFi upgrade without changing Migration
+Studio's selected model. A larger model is not evidence of better task accuracy;
+benchmark full workflows and latency before changing defaults.
+
+### Gemma 3 timeout correction (18 October 2026)
+
+Fixed ClariFi's hardcoded 180-second deadline. Both the local demo and deployed VM
+now use `CLARIFI_LLM_TIMEOUT_SECONDS=600`. The existing general workbench timeout
+is honored when no ClariFi override is supplied. Availability checks now show
+“Model available” and the effective timeout rather than claiming inference is
+ready. Local drafting uses five-finding batches with required keys and
+finding-specific evidence constraints; post-generation validation remains intact.
+
+Real local Gemma 3 4B completed the 2,493-record synthetic Excel investigation in
+123.87 seconds, returning 990 computed findings and all 25 selected model-backed
+explanations. The smaller cloud case also completed with actual Docker financial
+tools in 167.55 seconds before the batching change. These are synthetic workflow
+checks, not measured detection accuracy. The local regression suite passed
+423 tests with 20 Docker/live tests deselected; the earlier separate Docker
+integration run passed all 20 tests.
+
+The final constrained-batch implementation also passed a real cloud Gemma 3 4B
+combined investigation with Docker financial tools: five expected findings,
+scores 95/95/80/80/80, a validated model-backed draft, and total elapsed time
+189.26 seconds. The 600-second setting is per request; this timing is for the
+complete small investigation. Larger cloud workloads were not benchmarked by
+this final smoke test. The separate private Gemini routing issue is unchanged.
+
+### Public UI progress and model picker verification
+
+Added an installed-model dropdown (30-second inventory cache and explicit refresh)
+and request-scoped stage/batch progress on the direct ClariFi screen. Published
+in place without restarting the VM UI service or deleting reports. A fresh public
+browser session listed `gemma4:12b-it-qat` alongside `gemma3:4b`, displayed a live
+analyst-draft batch stage, and completed a real Gemma 3 4B synthetic insider-trading
+investigation with two 95-point review findings. This verifies that browser path;
+it does not establish that every earlier browser session remained connected.
+The local regression suite passed 426 tests, with 20 Docker/live tests deselected.
+Gemma 4 remains an explicitly selected experimental CPU option.

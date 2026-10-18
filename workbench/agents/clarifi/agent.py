@@ -1,6 +1,6 @@
 """Additive LangGraph agent: plan → financial tools → verify → grounded draft.
 
-This path executes reviewed functions, never LLM-generated code or Docker.
+Reviewed functions run directly or through an explicitly supplied sandbox executor.
 The existing workbench Workflow and its local-only model policy are unchanged.
 """
 from __future__ import annotations
@@ -40,9 +40,10 @@ def source_ids(source):
 
 
 class ClariFiAgent:
-    def __init__(self, *, mode="vertex", reasoner=None, model=None):
+    def __init__(self, *, mode="vertex", reasoner=None, model=None, tool_executor=None):
         if mode not in {"vertex", "gemini", "local", "rules"}:
             raise ValueError("ClariFi mode must be vertex, gemini, local or rules")
+        self.tool_executor = tool_executor
         self.reasoner = reasoner if reasoner is not None else (
             VertexReasoner(model) if mode == "vertex" else GeminiAPIReasoner(model) if mode == "gemini"
             else LocalReasoner(model) if mode == "local" else RulesReasoner())
@@ -58,6 +59,13 @@ class ClariFiAgent:
         return {"plan": plan, "trace": [{"stage": "plan", "tools": plan.tools}]}
 
     def _investigate(self, state):
+        if self.tool_executor is not None:
+            result = self.tool_executor(state["source"], state["plan"].tools)
+            findings = [Finding.model_validate(item) for item in result["findings"]]
+            if len(findings) > 2000:
+                raise ValueError("Investigation produces too many identity candidates; narrow the supplied scope")
+            return {"findings": sorted(findings, key=lambda f: (-f.score, f.finding_id)),
+                    "trace": state["trace"] + result["trace"]}
         findings = []
         trace = list(state["trace"])
         for tool in state["plan"].tools:
@@ -117,7 +125,28 @@ class ClariFiAgent:
         graph.add_edge("draft_report", END)
         # Avoid ambient LangSmith export of financial data from this agent.
         with tracing_context(enabled=False):
-            state = graph.compile().invoke({"source": source})
+            from .progress import progress_listener
+            listener = progress_listener()
+            compiled = graph.compile()
+            if listener is None:
+                state = compiled.invoke({"source": source})
+            else:
+                state = {"source": source}
+                listener({"stage": "plan", "message": "Planning the investigation with the selected model…"})
+                next_steps = {
+                    "plan_investigation": ("tools", "Running financial investigation tools…"),
+                    "run_tools": ("verify", "Verifying scores and source evidence…"),
+                    "verify_evidence": ("draft", "Drafting evidence-linked analyst explanations…"),
+                    "draft_report": ("complete", "Analyst draft validated; saving the report…"),
+                }
+                for kind, event in compiled.stream({"source": source}, stream_mode=["updates", "custom"]):
+                    if kind == "custom":
+                        listener(event)
+                    else:
+                        for node, values in event.items():
+                            state.update(values)
+                            stage, message = next_steps[node]
+                            listener({"stage": stage, "message": message})
         digest = hashlib.sha256(json.dumps(source.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
         return {
             "investigation_id": uuid4().hex, "case_id": source.case_id, "agent": "clarifi",
@@ -126,6 +155,7 @@ class ClariFiAgent:
             "findings": [f.model_dump(mode="json") for f in state["findings"]],
             "narrative": state["narrative"].model_dump(), "trace": state["trace"],
             "provenance": {"reasoning_provider": self.reasoner.provider, "model": self.reasoner.model,
+                           "execution": "docker_sandbox" if self.tool_executor is not None else "in_process",
                            "ai_used": self.reasoner.provider in {"vertex_ai_gemini", "gemini_api", "local_ollama"},
                            "analysis": "reviewed Python tools; no generated code", "analyst_review_required": True,
                            "score_kind": "heuristic triage, not calibrated probability",

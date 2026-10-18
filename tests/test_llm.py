@@ -278,3 +278,22 @@ def test_context_budget_reserves_the_full_configured_output(tmp_path):
     with pytest.raises(LLMError, match="configured context"):
         client.structured(Answer, "Return value", "x" * 1200)
     assert requests == []
+
+
+@pytest.mark.parametrize("model", ["gemma4:12b-it-qat", "gemma3:4b"])
+def test_gemma4_structured_answer_disables_thinking_only_for_selected_model(tmp_path, monkeypatch, model):
+    requests = []
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"content": '{"value":7}'}, "done_reason": "stop"})
+    client = OllamaClient(Settings(workspace_root=tmp_path, ollama_model=model),
+                          client=httpx.Client(transport=httpx.MockTransport(respond)))
+    monkeypatch.setattr(client, "_resolve_model", lambda: None)
+    raw, reason = client._generate("Answer", Answer.model_json_schema(), [{"role": "user", "content": "Count"}])
+    assert Answer.model_validate_json(raw).value == 7 and reason == "stop"
+    if model.startswith("gemma4:"):
+        assert requests[0]["think"] is False
+    else:
+        assert "think" not in requests[0]
+    assert requests[0]["format"] == Answer.model_json_schema()
+    client.close()

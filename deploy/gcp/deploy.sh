@@ -12,6 +12,7 @@ PREFIX="${PREFIX:-agentic-workbench}"
 CLARIFI_MODE="${CLARIFI_MODE:-gemini}"
 CLARIFI_API_MODEL="${CLARIFI_API_MODEL:-gemini-3.5-flash-lite}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-gemma3:4b}"
+CLARIFI_LOCAL_MODEL="${CLARIFI_LOCAL_MODEL:-$OLLAMA_MODEL}"
 MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-8}"
 BOOT_DISK_GB="${BOOT_DISK_GB:-100}"
 [[ "$PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,61}[a-z0-9]$ ]]
@@ -20,6 +21,7 @@ BOOT_DISK_GB="${BOOT_DISK_GB:-100}"
 [[ "$TAG" =~ ^[a-zA-Z0-9_.-]+$ && "$BOOT_DISK_GB" =~ ^[0-9]+$ ]]
 [[ "$OLLAMA_IMAGE" =~ ^ollama/ollama:[a-zA-Z0-9._-]+$ && "$OLLAMA_IMAGE" != *REPLACE* && "$OLLAMA_IMAGE" != *:latest ]]
 [[ "$OLLAMA_MODEL" =~ ^[a-zA-Z0-9._:/-]+$ ]]
+[[ "$CLARIFI_LOCAL_MODEL" =~ ^[a-zA-Z0-9._:/-]+$ ]]
 if [[ "$CLARIFI_MODE" == gemini ]]; then
   : "${CLARIFI_API_KEY_SECRET:?Set an existing Secret Manager name:version, never the API key}"
   [[ "$CLARIFI_API_KEY_SECRET" =~ ^[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+$ ]]
@@ -129,7 +131,7 @@ gcloud compute scp "$STAGING/workbench-source.tar.gz" deploy/gcp/bootstrap.sh \
   "$VM:~/" --project="$PROJECT_ID" --zone="$ZONE" --tunnel-through-iap "${SSH_FLAGS[@]}"
 gcloud compute ssh "$VM" --project="$PROJECT_ID" --zone="$ZONE" --tunnel-through-iap \
   "${SSH_FLAGS[@]}" \
-  --command="sudo env CLARIFI_API_URL='$API_URL' CLARIFI_REMOTE_MODEL='$REMOTE_MODEL' PUBLIC_HOST='$PUBLIC_HOST' OLLAMA_IMAGE='$OLLAMA_IMAGE' OLLAMA_MODEL='$OLLAMA_MODEL' bash ./bootstrap.sh ./workbench-source.tar.gz"
+  --command="sudo env CLARIFI_API_URL='$API_URL' CLARIFI_REMOTE_MODEL='$REMOTE_MODEL' PUBLIC_HOST='$PUBLIC_HOST' OLLAMA_IMAGE='$OLLAMA_IMAGE' OLLAMA_MODEL='$OLLAMA_MODEL' CLARIFI_LOCAL_MODEL='$CLARIFI_LOCAL_MODEL' bash ./bootstrap.sh ./workbench-source.tar.gz"
 echo "Checking anonymous HTTPS access through the public gateway..."
 curl --fail --silent --show-error --retry 10 --retry-delay 5 --max-time 20 \
   --output /dev/null "$PUBLIC_URL/_stcore/health"

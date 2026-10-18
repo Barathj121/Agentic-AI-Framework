@@ -128,6 +128,16 @@ def sample_input(tool: str) -> InvestigationInput:
                                              **{key: data[key] for key in TOOL_TABLES[tool]}})
 
 
+def focused_input(tool: str) -> InvestigationInput:
+    """Curated positive synthetic cases for a short demo, not accuracy evaluation."""
+    if tool not in TOOL_TABLES:
+        raise IntakeError("Unknown financial capability")
+    sample = Path(__file__).resolve().parents[3] / "examples/clarifi/focused_review.json"
+    data = json.loads(sample.read_text(encoding="utf-8"))
+    return InvestigationInput.model_validate({"case_id": f"synthetic-focused-{tool}",
+                                             **{key: data[key] for key in TOOL_TABLES[tool]}})
+
+
 def validate_scope(data: InvestigationInput, tool: str) -> InvestigationInput:
     expected = ["insider_trading", "shell_companies"] if tool == "combined" else [tool]
     if data.tools != expected:

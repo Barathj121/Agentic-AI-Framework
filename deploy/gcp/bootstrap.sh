@@ -7,12 +7,14 @@ set -euo pipefail
 : "${OLLAMA_IMAGE:?Set the Ollama image tag to install}"
 : "${PUBLIC_HOST:?Set the public Cloud Run hostname}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-gemma3:4b}"
+CLARIFI_LOCAL_MODEL="${CLARIFI_LOCAL_MODEL:-$OLLAMA_MODEL}"
 ARCHIVE="${1:?Supply the source archive path}"
 [[ ! -e /opt/agentic-workbench ]] || { echo "Existing installation found; use the documented update procedure" >&2; exit 1; }
 # Only expected resource identifiers may enter the systemd environment file.
 [[ "$CLARIFI_API_URL" =~ ^https://[a-z0-9-]+(\.[a-z0-9-]+)?\.run\.app$ ]]
 [[ "$CLARIFI_REMOTE_MODEL" =~ ^[a-zA-Z0-9._/-]+$ ]]
 [[ "$OLLAMA_MODEL" =~ ^[a-zA-Z0-9._:/-]+$ ]]
+[[ "$CLARIFI_LOCAL_MODEL" =~ ^[a-zA-Z0-9._:/-]+$ ]]
 [[ "$PUBLIC_HOST" =~ ^[a-z0-9-]+(\.[a-z0-9-]+)?\.run\.app$ ]]
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -37,7 +39,7 @@ Before=agentic-workbench.service agentic-workbench-admin.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c '/usr/sbin/iptables -C DOCKER-USER -d 169.254.169.254/32 -j REJECT || /usr/sbin/iptables -I DOCKER-USER -d 169.254.169.254/32 -j REJECT'
+ExecStart=/bin/sh -c '/usr/sbin/iptables -C DOCKER-USER -d 169.254.169.254/32 -p tcp -m multiport --dports 80,443 -j REJECT || /usr/sbin/iptables -I DOCKER-USER -d 169.254.169.254/32 -p tcp -m multiport --dports 80,443 -j REJECT'
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -47,7 +49,7 @@ docker run --detach --name workbench-public-demo --restart unless-stopped \
   --publish 127.0.0.1:18501:8501 --user 10001:10001 --read-only \
   --cap-drop ALL --security-opt no-new-privileges:true --pids-limit 128 \
   --memory 256m --memory-swap 256m --cpus 1 --tmpfs /tmp:rw,nosuid,size=64m \
-  --log-driver local --log-opt max-size=2m --log-opt max-file=1 workbench-example:demo
+  --log-driver local --log-opt max-size=2m --log-opt max-file=2 workbench-example:demo
 docker pull "$OLLAMA_IMAGE"
 # Resolve the downloaded image to its immutable local ID for subsequent restarts.
 OLLAMA_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$OLLAMA_IMAGE")
@@ -62,11 +64,17 @@ for attempt in {1..60}; do
 done
 [[ "$ready" == true ]] || { echo "Ollama did not become ready" >&2; exit 1; }
 docker exec workbench-ollama ollama pull "$OLLAMA_MODEL"
+if [[ "$CLARIFI_LOCAL_MODEL" != "$OLLAMA_MODEL" ]]; then
+  docker exec workbench-ollama ollama pull "$CLARIFI_LOCAL_MODEL"
+fi
 cat >/etc/agentic-workbench.env <<EOF
 WORKSPACE_ROOT=/var/lib/agentic-workbench/workspaces
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=$OLLAMA_MODEL
+CLARIFI_LOCAL_MODEL=$CLARIFI_LOCAL_MODEL
+CLARIFI_ENABLE_LOCAL=true
 LLM_TIMEOUT_SECONDS=600
+CLARIFI_LLM_TIMEOUT_SECONDS=600
 CLARIFI_API_URL=$CLARIFI_API_URL
 CLARIFI_REMOTE_MODEL=$CLARIFI_REMOTE_MODEL
 EOF
