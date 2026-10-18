@@ -1,0 +1,10 @@
+FROM python:3.11-slim-bookworm
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+COPY requirements.txt requirements-clarifi.txt ./
+RUN pip install -r requirements-clarifi.txt && useradd --uid 10001 --create-home clarifi
+COPY --chown=clarifi:clarifi workbench ./workbench
+USER 10001:10001
+ENV PORT=8080
+EXPOSE 8080
+CMD ["sh", "-c", "exec uvicorn workbench.agents.clarifi.api:app --host 0.0.0.0 --port ${PORT}"]

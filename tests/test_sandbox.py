@@ -10,7 +10,7 @@ import duckdb
 import pytest
 
 from workbench.data import ingest_csv
-from workbench.sandbox import MAX_LOG_BYTES, SandboxManager, _copy_stream, _raw_digest
+from workbench.sandbox import sandbox_identity, MAX_LOG_BYTES, SandboxManager, _copy_stream, _raw_digest
 from workbench.schemas import BuildResult, ExecutionResult, GeneratedFile, OutputSpec
 from workbench.settings import Settings
 from workbench.workspace import WorkspaceManager
@@ -35,7 +35,7 @@ def test_docker_command_restricts_mounts_and_privileges(sandbox_workspace, tmp_p
     workspace, settings = sandbox_workspace
     command = SandboxManager(settings)._command(workspace, tmp_path / "contract", "adw-test", "execute")
     assert command[:2] == ["docker", "run"]
-    for option, value in (("--network", "none"), ("--user", "10001:10001"), ("--cap-drop", "ALL"),
+    for option, value in (("--network", "none"), ("--user", sandbox_identity()), ("--cap-drop", "ALL"),
                           ("--security-opt", "no-new-privileges:true"), ("--pids-limit", "128")):
         assert command[command.index(option) + 1] == value
     assert "--read-only" in command and "--privileged" not in command
@@ -62,6 +62,47 @@ def test_missing_docker_fails_without_running_code(sandbox_workspace, monkeypatc
     assert not result.success and result.exit_code is None
     assert "daemon unavailable" in result.error
     assert "daemon unavailable" in (workspace / result.stderr_path).read_text()
+
+
+@pytest.mark.parametrize('version', ['', '\n', '<no value>', 'not-a-version'])
+def test_health_rejects_zero_exit_backend_failure(sandbox_workspace, monkeypatch, version):
+    _, settings = sandbox_workspace
+    manager = SandboxManager(settings)
+    calls = []
+    error = 'Error response from daemon: failed to connect to the backend: timed out dialing Hyper-V socket'
+
+    def docker(arguments, **kwargs):
+        calls.append(arguments)
+        return subprocess.CompletedProcess(arguments, 0, version, error)
+
+    monkeypatch.setattr(manager, '_docker', docker)
+    assert manager.health() == {'available': False, 'image_available': False, 'error': error}
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('error,missing', [
+    ('Error response from daemon: failed to connect to the backend: timed out dialing Hyper-V socket', False),
+    ('Error response from daemon: No such image: agentic-workbench-sandbox:latest', True),
+])
+def test_health_preserves_image_inspection_error(sandbox_workspace, monkeypatch, error, missing):
+    _, settings = sandbox_workspace
+    manager = SandboxManager(settings)
+    results = iter([subprocess.CompletedProcess([], 0, '29.5.3\n', ''),
+                    subprocess.CompletedProcess([], 1, '', error)])
+    monkeypatch.setattr(manager, '_docker', lambda *args, **kwargs: next(results))
+    health = manager.health()
+    assert health['available'] is missing and not health['image_available']
+    assert error in health['error']
+    assert ('docker build' in health['error']) is missing
+
+
+def test_health_confirms_version_and_image_evidence(sandbox_workspace, monkeypatch):
+    _, settings = sandbox_workspace
+    manager = SandboxManager(settings)
+    results = iter([subprocess.CompletedProcess([], 0, '29.5.3\n', 'WARNING: advisory\n'),
+                    subprocess.CompletedProcess([], 0, 'sha256:' + 'a' * 64 + '\n', '')])
+    monkeypatch.setattr(manager, '_docker', lambda *args, **kwargs: next(results))
+    assert manager.health() == {'available': True, 'image_available': True, 'error': None}
 
 
 def test_bounded_log_capture_drains_stream(tmp_path):
@@ -236,3 +277,13 @@ def test_docker_raw_changes_fail_and_restore(sandbox_workspace):
     result = _live_manager(settings).execute(workspace, build_code(workspace, source), 1)
     assert not result.success and "restored" in result.error
     assert _raw_digest(workspace / "database/workspace.duckdb") == before
+
+
+def test_linux_sandbox_preserves_nonroot_output_ownership(monkeypatch):
+    import workbench.sandbox as module
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.setattr(module.os, "getuid", lambda: 999)
+    monkeypatch.setattr(module.os, "getgid", lambda: 994)
+    assert module.sandbox_identity() == "999:994"
+    monkeypatch.setattr(module.os, "getuid", lambda: 0)
+    assert module.sandbox_identity() == "10001:10001"

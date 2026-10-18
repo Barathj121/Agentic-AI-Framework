@@ -1,0 +1,5 @@
+*
+!deploy/
+!deploy/gcp/
+!deploy/gcp/gateway/
+!deploy/gcp/gateway/nginx.conf.template

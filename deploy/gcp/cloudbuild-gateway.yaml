@@ -1,0 +1,13 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: sh
+    args:
+      - -c
+      - |
+        set -eu
+        cp deploy/gcp/gateway/Dockerfile.dockerignore .dockerignore
+        docker build -f deploy/gcp/gateway/Dockerfile -t '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/gateway:${_TAG}' .
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/gateway:${_TAG}'
+options:
+  logging: CLOUD_LOGGING_ONLY

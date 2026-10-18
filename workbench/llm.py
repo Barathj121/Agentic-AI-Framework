@@ -288,13 +288,19 @@ class OllamaClient(_LocalStructuredClient):
 
     def _generate(self, schema_name: str, schema: dict, messages: list[dict]) -> tuple[str, str | None]:
         self._resolve_model()
-        response = self._request("POST", "/api/chat", {
+        payload = {
             "model": self.model, "messages": messages, "stream": False,
             "format": schema if self.settings.llm_structured_mode == "json_schema" else "json",
             "options": {"temperature": self.settings.llm_temperature,
                         "num_ctx": self.settings.llm_context_tokens,
                         "num_predict": self.settings.llm_max_output_tokens},
-        })
+        }
+        # Gemma 4 otherwise defaults to an additional thinking stream, which
+        # consumes the bounded output/time budget before the schema answer.
+        # Keep earlier models' request contracts unchanged.
+        if self.model.split(":", 1)[0] == "gemma4":
+            payload["think"] = False
+        response = self._request("POST", "/api/chat", payload)
         message = response.get("message", {})
         return (message.get("content", "") if isinstance(message, dict) else "", response.get("done_reason"))
 

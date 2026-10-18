@@ -1,0 +1,9 @@
+# Optional agent/API dependencies. The original requirements.txt stays unchanged.
+-r requirements.txt
+langgraph>=1.0,<2
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+scikit-learn>=1.6,<2
+google-genai>=2,<3
+google-cloud-storage>=3,<4
+openpyxl>=3.1,<4

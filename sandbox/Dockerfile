@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r /opt/workbench/requirements.txt \
     && useradd --uid 10001 --gid 10001 --no-create-home workbench \
     && mkdir -p /workspace/input /workspace/generated /workspace/database /workspace/results /workspace/models /workspace/notebooks
 COPY sandbox/runner.py /opt/workbench/runner.py
+COPY workbench/agents/clarifi/__init__.py workbench/agents/clarifi/schemas.py workbench/agents/clarifi/tools.py /opt/workbench/clarifi_runtime/
 RUN chmod 0555 /opt/workbench/runner.py && chmod 0755 /workspace
 USER 10001:10001
 WORKDIR /workspace

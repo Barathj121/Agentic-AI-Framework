@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -23,6 +24,15 @@ AVAILABLE_DEPENDENCIES = frozenset({
     "statsmodels", "matplotlib", "plotly", "joblib", "nbformat", "nbclient", "ipykernel",
 })
 MAX_LOG_BYTES = 2 * 1024 * 1024
+
+
+def sandbox_identity() -> str:
+    # Linux bind mounts retain numeric ownership. Match the unprivileged host
+    # service so later inspection/retries can update container-created files.
+    # Root launchers and Docker Desktop retain the isolated fallback UID.
+    if sys.platform == "linux" and os.getuid() != 0 and os.getgid() != 0:
+        return f"{os.getuid()}:{os.getgid()}"
+    return "10001:10001"
 REPORT_MARKER = "WORKBENCH_INSPECTION_JSON="
 
 
@@ -98,12 +108,20 @@ class SandboxManager:
     def health(self) -> dict:
         try:
             daemon = self._docker(["info", "--format", "{{.ServerVersion}}"], timeout=8)
-            if daemon.returncode:
+            # Some Docker proxies return exit code zero alongside a backend
+            # connection error and no version. A CLI exit is not readiness.
+            version = daemon.stdout.strip()
+            if daemon.returncode or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?(?:[-+~][\w.-]+)?", version):
                 return {"available": False, "image_available": False,
-                        "error": daemon.stderr.strip()[-1500:] or "Docker daemon is unavailable"}
-            image = self._docker(["image", "inspect", self.settings.sandbox_image], timeout=8)
-            return {"available": True, "image_available": image.returncode == 0,
-                    "error": None if image.returncode == 0 else "Sandbox image is missing. Run the documented docker build command."}
+                        "error": daemon.stderr.strip()[-1500:] or "Docker daemon did not return a valid server version"}
+            image = self._docker(["image", "inspect", self.settings.sandbox_image, "--format", "{{.Id}}"], timeout=8)
+            if image.returncode == 0 and re.fullmatch(r"sha256:[0-9a-fA-F]{64}", image.stdout.strip()):
+                return {"available": True, "image_available": True, "error": None}
+            error = image.stderr.strip()[-1500:] or "Docker did not return a valid sandbox image ID"
+            missing = any(message in error.lower() for message in ("no such image", "no such object"))
+            if missing:
+                error += "\nSandbox image is missing. Run the documented docker build command."
+            return {"available": missing, "image_available": False, "error": error}
         except (OSError, subprocess.SubprocessError) as exc:
             return {"available": False, "image_available": False, "error": str(exc)}
 
@@ -137,7 +155,7 @@ class SandboxManager:
         if not memory:
             raise ValueError("Sandbox memory must be a byte count or integer k/m/g/t size")
         memory_bytes = int(memory[1]) * 1024 ** ("kmgt".index(memory[2]) + 1 if memory[2] else 0)
-        cmd = ["docker", "run", "--name", name, "--network", "none", "--user", "10001:10001",
+        cmd = ["docker", "run", "--name", name, "--network", "none", "--user", sandbox_identity(),
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--read-only",
                "--pids-limit", "128", "--cpus", str(self.settings.sandbox_cpus),
                "--memory", self.settings.sandbox_memory, "--memory-swap", self.settings.sandbox_memory,

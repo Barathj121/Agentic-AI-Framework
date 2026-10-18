@@ -1,0 +1,190 @@
+{
+  "recorded_at": "2026-10-17T19:13:09.402515+00:00",
+  "branch": "feature/clarifi-financial-agents",
+  "base_commit": "e51f326d0adb6f4946e3ef7f171e50b6a56129fc",
+  "tests": {
+    "tests": 243,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 15,
+    "passed": 228
+  },
+  "final_agent_focused_suite": {
+    "cases_in_full_suite": 73,
+    "failed": 0
+  },
+  "runtime": {
+    "python": "3.13.1",
+    "langgraph": "1.2.16",
+    "pydantic": "2.14.1",
+    "scikit-learn": "1.9.1",
+    "google-genai": "2.31.0",
+    "fastapi": "0.143.3"
+  },
+  "offline_demo": {
+    "status": "COMPLETED",
+    "ai_used": false,
+    "findings": 10,
+    "ml_scored_findings": 0,
+    "input_sha256": "69c731278e8ab01f422fc46f537598a5504bbbe6506ff09879fd01d6a9c9c60e"
+  },
+  "checks": [
+    "existing workflow and Streamlit regression tests passed",
+    "financial agent and API tests passed",
+    "CSV importer and source-reference validation passed",
+    "approval checkpoint and approved CLI run verified",
+    "deploy shell syntax and git whitespace checks passed",
+    "financial UI intake, approval, evidence, history and stale-results tests passed",
+    "both synthetic capabilities completed through actual local-model UI flows",
+    "both Excel templates round-trip through validation and rules investigations",
+    "Excel formulas and mismatched capability sheets rejected",
+    "ClariFi Agent branding and business scenarios inspected in live browser at narrow pane width"
+  ],
+  "unverified": [
+    "live Vertex AI Gemini generation",
+    "actual GCS upload and IAM",
+    "Linux container build",
+    "Cloud Run deployment",
+    "80-90 percent detection accuracy",
+    "wide desktop browser layout inspection"
+  ],
+  "local_tools": {
+    "docker_available": false,
+    "gcloud_available": false,
+    "ollama_available": true
+  },
+  "accuracy_status": "Unmeasured; heuristic scores and synthetic regressions do not establish real-world accuracy",
+  "repository_status": "Local uncommitted changes; nothing pushed",
+  "live_local_ui": [
+    {
+      "capability": "insider_trading",
+      "status": "COMPLETED",
+      "ai_used": true,
+      "model": "gemma3:1b",
+      "findings": 6,
+      "investigation_id": "0f83c1f0e32b4ba0923f8d9f0553506c",
+      "surface": "streamlit_apptest",
+      "ui_metrics": [
+        {
+          "label": "Findings",
+          "value": "6"
+        },
+        {
+          "label": "Analyst review",
+          "value": "2"
+        },
+        {
+          "label": "Identity review",
+          "value": "3"
+        },
+        {
+          "label": "Highest triage score",
+          "value": "95/100"
+        }
+      ]
+    },
+    {
+      "capability": "shell_companies",
+      "status": "COMPLETED",
+      "ai_used": true,
+      "model": "gemma3:1b",
+      "findings": 4,
+      "investigation_id": "51d009dd5471435a8da5cd1018a07919",
+      "surface": "streamlit_apptest",
+      "ui_metrics": [
+        {
+          "label": "Findings",
+          "value": "4"
+        },
+        {
+          "label": "Analyst review",
+          "value": "2"
+        },
+        {
+          "label": "Identity review",
+          "value": "0"
+        },
+        {
+          "label": "Highest triage score",
+          "value": "80/100"
+        }
+      ]
+    }
+  ],
+  "live_local_agent": [
+    {
+      "capability": "insider_trading",
+      "status": "COMPLETED",
+      "ai_used": true,
+      "model": "gemma3:1b",
+      "findings": 6,
+      "investigation_id": "89389d22ef04437abba252f764e75fa3"
+    },
+    {
+      "capability": "shell_companies",
+      "status": "COMPLETED",
+      "ai_used": true,
+      "model": "gemma3:1b",
+      "findings": 4,
+      "investigation_id": "8fb5515a627d4668b047c7302c0e93ad"
+    }
+  ],
+  "local_model": {
+    "name": "gemma3:1b",
+    "digest": "97558784bdc9175075a72655bf360b15da17df6b3b9e5182af9f8c0c8e58ba7c",
+    "runtime": "Ollama 0.40.5",
+    "model_calls_are_real": true
+  },
+  "local_ui": {
+    "url": "http://127.0.0.1:8510/?sector=finance",
+    "health_http_status": 200,
+    "flow_verification": "Streamlit AppTest with real local Ollama calls; no mocked model",
+    "visual_browser_verification": false,
+    "browser_limitation": "In-app browser could not connect; error-page navigation was blocked by browser policy"
+  },
+  "initial_local_model_failure": {
+    "capability": "shell_companies",
+    "error": "Planner selected a tool not available to this input",
+    "resolution": "Scoped structured response schema restricts tool choices and tool count; both cases subsequently completed"
+  },
+  "setup_note": "Ollama installed with Homebrew dependencies; python3 default restored to Python 3.13.1 and ripgrep restored after automatic package cleanup.",
+  "gemini_api_verification": {
+    "model": "gemini-3.5-flash-lite",
+    "credential_storage": "ignored local .env, permissions 0600; not included in Git or reports",
+    "model_lookup": "passed",
+    "minimal_text_generation": "passed",
+    "structured_tool_plan": "passed",
+    "full_investigation": "COMPLETED for small and large combined simulated cases",
+    "no_fallback": true,
+    "generation_transport": "single stateless Interactions REST request through HTTPX; no automatic quota retry",
+    "quota_diagnostic": "Google reports 20 requests per day for gemini-3.8-flash on Free Tier; model lookup HTTP 200; generation HTTP 429",
+    "error_handling": "timeouts, connectivity, quota and authentication failures distinguished without exposing SDK text or credentials",
+    "verified_combined": {
+      "investigation_id": "685632fd777f43df91c9f82e2c05797a",
+      "input_rows": 2493,
+      "findings": 990,
+      "ai_used": true,
+      "planning": "validated",
+      "analyst_draft": "validated"
+    },
+    "model_catalog": "Nine explicit Google text-model candidates plus custom ID; hosted Gemma entries labeled experimental",
+    "gemma_api_probe": "gemma-4-26b-a4b-it model lookup passed; structured planning timed out; no completed report",
+    "cloud_run_script": "Vertex and Gemini API branches passed syntax and mock-gcloud execution; actual deployment remains unverified"
+  },
+  "combined_workbook_verification": {
+    "status": "COMPLETED",
+    "evidence_rows": 2493,
+    "trades": 900,
+    "payments": 1200,
+    "findings": 990,
+    "analyst_review": 39,
+    "identity_review": 10,
+    "reasoning_provider": "rules_only",
+    "live_browser_upload_verified": true,
+    "export_matches_baseline_findings": true,
+    "sha256": "a1b01a8c10e1ee33bcdbb9ce6e9b9a4b82c7d96a0c9a394ce47b099532703a37",
+    "data_status": "Simulated operational records with separately cited public-case references; not historical ledgers or held-out accuracy data",
+    "upload_validation": "Verified again in live browser: original workbook accepted in Combined mode; single-capability mismatch now gives explicit guidance",
+    "validation_errors": "Safe worksheet, row and field guidance without submitted values"
+  }
+}

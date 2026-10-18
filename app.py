@@ -6,7 +6,10 @@ Generated programs are only executed by the Docker sandbox, never by this app.
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import replace
 from pathlib import Path
+from uuid import uuid4
 
 import pandas as pd
 import plotly.io as pio
@@ -18,18 +21,59 @@ from ui.helpers import (
 )
 from workbench.data import database_schema, sql_preview
 from workbench.service import Service
-from workbench.settings import Settings
+from workbench.settings import Settings, public_demo_enabled
 from workbench.workspace import safe_path
 
-PAGES = ["Home", "Migration Studio", "External applications", "New workspace", "Solution proposals", "Execution monitor", "Results", "Workspace history"]
+PAGES = ["Home", "Migration Studio", "ClariFi Agent", "External applications", "New workspace", "Solution proposals", "Execution monitor", "Results", "Workspace history"]
 ACTIVE = {"PROPOSING", "UNDERSTANDING", "EXPLORING", "GENERATING_PROPOSALS", "CHECKING_FEASIBILITY",
           "BUILDING", "GENERATING", "EXECUTING", "VALIDATING", "REPAIRING", "RUNNING", "QUEUED", "APPROVED",
           "EVALUATING_FEASIBILITY", "PLAN_APPROVED", "GENERATING_SOLUTION"}
+PUBLIC_SESSION_PARAMETER = "public_session_id"
 
 
 @st.cache_resource
-def get_service() -> Service:
-    return Service(Settings.from_env())
+def get_service(visitor_scope: str = "") -> Service:
+    settings = Settings.from_env()
+    if public_demo_enabled():
+        if not re.fullmatch(r"[a-f0-9]{32}", visitor_scope):
+            raise ValueError("A server-generated visitor scope is required for the public demo")
+        settings = replace(settings, workspace_root=safe_path(
+            settings.workspace_root, f"public-sessions/{visitor_scope}"))
+    elif visitor_scope:
+        raise ValueError("Visitor scopes are only used by the public demo")
+    return Service(settings)
+
+
+def public_session_service() -> Service:
+    """Resume only the isolated visitor scope named by a private bearer link."""
+    current = st.session_state.get("public_visitor_scope")
+    requested = st.query_params.get(PUBLIC_SESSION_PARAMETER)
+    if PUBLIC_SESSION_PARAMETER in st.query_params and requested != current:
+        valid = bool(isinstance(requested, str) and re.fullmatch(r"[a-f0-9]{32}", requested))
+        if valid:
+            try:
+                root = Settings.from_env().workspace_root
+                valid = safe_path(root, f"public-sessions/{requested}").is_dir()
+            except (ValueError, OSError):
+                valid = False
+        if not valid:
+            st.error("This private workspace link is invalid or no longer available. Use the original saved link to reopen your history.")
+            if st.button("Start a new private workspace session"):
+                st.query_params.pop(PUBLIC_SESSION_PARAMETER, None)
+                st.session_state.clear()
+                st.rerun()
+            st.stop()
+        # A deliberate link switch must not retain another scope's cached
+        # reports, selected workspaces, upload widgets or download content.
+        st.session_state.clear()
+        current = requested
+    if not current:
+        current = uuid4().hex
+    st.session_state["public_visitor_scope"] = current
+    service = get_service(current)
+    if requested != current:
+        st.query_params[PUBLIC_SESSION_PARAMETER] = current
+    return service
 
 
 def navigate(page: str) -> None:
@@ -45,16 +89,22 @@ def home_page(service: Service) -> None:
     st.header("Agentic Data & Application Workbench")
     st.write("Build, execute and explore data-driven solutions.")
     st.subheader("Applications")
-    migration, external = st.columns(2)
+    migration, clarifi, external = st.columns(3)
     with migration.container(border=True):
         st.subheader("Migration Studio")
         st.write("Assess source-to-target fit, review mappings, transform data and export a reusable connector.")
         if st.button("Launch Migration Studio", type="primary", width="stretch"):
             navigate("Migration Studio")
+    with clarifi.container(border=True):
+        st.subheader("ClariFi Agent :blue-badge[Finance]")
+        st.write("Review company backgrounds and trading risks for more informed financial decisions.")
+        if st.button("Launch ClariFi Agent", type="primary", width="stretch"):
+            navigate("ClariFi Agent")
     with external.container(border=True):
         st.subheader("External application")
-        st.write("Register and launch a trusted local Docker application.")
-        if st.button("Register / launch application", width="stretch"):
+        st.write("Explore a preconfigured application running alongside the workbench." if public_demo_enabled()
+                 else "Register and launch a trusted local Docker application.")
+        if st.button("Open application demo" if public_demo_enabled() else "Register / launch application", width="stretch"):
             navigate("External applications")
     st.subheader("Data experimentation")
     st.write("Upload data and describe a business problem. Agents propose, generate, execute and validate computational solutions after your approval.")
@@ -102,16 +152,35 @@ def profile_panel(service: Service, workspace: Path) -> None:
 
 def new_workspace(service: Service, workspace: Path | None) -> None:
     st.header("Start with your data")
-    st.write("Upload a CSV and describe the outcome you need. Review the dataset, compare proposed approaches, then approve an implementation.")
+    st.write('Upload data and describe the outcome you need. Include “use ClariFi agent” to prepare financial records through Migration Studio before investigation. Other workbench tasks use a single CSV.')
     with st.form("workspace_form", clear_on_submit=False):
         name = st.text_input("Workspace name", placeholder="e.g. Customer activity review", max_chars=100)
-        upload = st.file_uploader("Dataset", type=["csv"], max_upload_size=service.settings.max_upload_mb,
+        upload = st.file_uploader("Dataset", type=["csv", "xlsx", "json"], max_upload_size=service.settings.max_upload_mb,
                                   help=f"Maximum {service.settings.max_upload_mb} MB. The original CSV is retained locally.")
+        related = st.file_uploader("Related financial files (ClariFi only)", type=["csv", "xlsx", "json"],
+                                  accept_multiple_files=True, max_upload_size=5, key="clarifi_related_uploads")
         problem = st.text_area("What do you want to solve?", placeholder="Describe the business question, desired outputs, and any constraints.", height=125, max_chars=12000)
         submitted = st.form_submit_button("Create & profile workspace", type="primary", width="stretch")
     if submitted:
-        if not name.strip() or not problem.strip() or upload is None:
+        from workbench.agents.clarifi.preparation import requests_clarifi
+        financial = requests_clarifi(problem)
+        if financial and (upload is not None or related):
+            try:
+                from workbench.agents.clarifi.preparation import read_sources
+                files = [(item.name, item.getvalue()) for item in ([upload] if upload is not None else []) + list(related)]
+                read_sources(files)
+                st.session_state["clarifi_routed_files"] = files
+                st.session_state["clarifi_instruction"] = problem.strip()
+                st.session_state["clarifi_intake_mode"] = "Prepare with Migration"
+                if name.strip():
+                    st.session_state["clarifi_preparation_case"] = re.sub(r"[^A-Za-z0-9_.:-]", "-", name.strip())[:100]
+                navigate("ClariFi Agent")
+            except Exception:
+                st.error("ClariFi accepts CSV, Excel and JSON tables up to 5 MiB combined. Check file contents and use values rather than Excel formulas.")
+        elif not name.strip() or not problem.strip() or upload is None:
             st.error("Add a name, a CSV dataset, and a business problem to create a workspace.")
+        elif not upload.name.lower().endswith(".csv") or related:
+            st.error('General workbench tasks use one CSV. Include “use ClariFi agent” to prepare multiple financial files.')
         else:
             try:
                 with st.spinner("Saving the dataset and profiling it locally…"):
@@ -455,25 +524,49 @@ def results_page(service: Service, workspace: Path) -> None:
 
 def history_page(service: Service) -> None:
     st.header("Workspace history")
+    if public_demo_enabled():
+        st.caption("This private link opens your saved workspace history, including after a refresh or a later visit. Bookmark the current address; a visit without this link starts a separate session.")
+    workspace_type = st.selectbox("Workspace type", ["All", "Migrations"], key="workspace_history_filter")
     workspaces = service.manager.list()
     if not workspaces:
         st.info("Your saved workspaces will appear here after the first CSV upload.")
         return
     search = st.text_input("Find a workspace", placeholder="Filter by name or problem").casefold()
+    shown = 0
     for item in workspaces:
+        migration = item.get("kind") == "migration" or item.get("application") == "migration_studio"
+        if workspace_type == "Migrations" and not migration:
+            continue
         if search and search not in (str(item.get("name", "")) + " " + str(item.get("problem", ""))).casefold():
             continue
+        shown += 1
         with st.container(border=True):
+            workspace = service.manager.get(item["id"]) if migration else None
+            review = (service.manager.read(workspace, "metadata/mapping_review.json", {}) or {}) if migration else {}
+            review_pending = bool(review.get("invalidation_pending"))
             left, right = st.columns([4, 1])
             left.subheader(item.get("name", item["id"]))
-            left.caption(f"{item.get('status', 'UNKNOWN')} · Updated {item.get('updated_at', 'unknown')} · {item['id']}")
+            status = "Mapping review paused" if review_pending else item.get('status', 'UNKNOWN')
+            left.caption(f"{status} · Updated {item.get('updated_at', 'unknown')} · {item['id']}")
             left.write(str(item.get("problem", ""))[:500])
+            if migration:
+                report = {} if review_pending else service.manager.read(workspace, "metadata/migration_result.json", {}) or {}
+                profile = service.manager.read(workspace, "metadata/profile.json", {}) or {}
+                counts = [("Source records", report.get("source_record_count", profile.get("row_count"))),
+                          ("Target records", report.get("target_record_count")),
+                          ("Valid", report.get("valid_records")), ("Invalid", report.get("invalid_records"))]
+                available = [f"{label}: {value:,}" for label, value in counts if isinstance(value, int)]
+                if available:
+                    left.caption(" · ".join(available))
             if right.button("Open workspace", key=f"open_{item['id']}", width="stretch"):
-                if item.get("kind") == "migration":
+                if migration:
                     st.session_state["migration_workspace_id"] = item["id"]
                     navigate("Migration Studio")
-                st.session_state["workspace_id"] = item["id"]
-                navigate("Results" if item.get("status") == "COMPLETED" else "Solution proposals" if item.get("status") == "AWAITING_APPROVAL" else "New workspace")
+                else:
+                    st.session_state["workspace_id"] = item["id"]
+                    navigate("Results" if item.get("status") == "COMPLETED" else "Solution proposals" if item.get("status") == "AWAITING_APPROVAL" else "New workspace")
+    if not shown:
+        st.info("No saved migrations match these filters." if workspace_type == "Migrations" else "No saved workspaces match these filters.")
 
 
 def main() -> None:
@@ -485,10 +578,18 @@ def main() -> None:
     [data-testid="stMetric"] {background:#f6f8fb; border:1px solid #dce4ed; border-radius:10px; padding:16px;}
     [data-testid="stMetricValue"] {font-size: 1.5rem;}
     </style>""", unsafe_allow_html=True)
+    if public_demo_enabled():
+        service = public_session_service()
+        st.caption("Hackathon demo · Bookmark this private link to reopen your saved workspaces. Anyone with the link can access this session's data, so keep it private.")
+    else:
+        service = get_service()
     if "next_page" in st.session_state:
         st.session_state["page"] = st.session_state.pop("next_page")
-    service = get_service()
-    if "diagnostics" not in st.session_state:
+    if "page" not in st.session_state and st.query_params.get("sector") == "finance":
+        st.session_state["page"] = "ClariFi Agent"
+    if st.session_state.get("page") == "Financial investigations":
+        st.session_state["page"] = "ClariFi Agent"
+    if "diagnostics" not in st.session_state and st.session_state.get("page") != "ClariFi Agent":
         with st.spinner("Checking the local model and sandbox…"):
             try:
                 st.session_state["diagnostics"] = service.diagnostics()
@@ -512,7 +613,7 @@ def main() -> None:
                 st.warning(f"Workspace could not be reopened: {exc}")
         else:
             st.caption("No workspace selected")
-        with st.expander("Local environment"):
+        with st.expander("CSV workflow environment"):
             diagnostics = st.session_state.get("diagnostics", {})
             for name, label, required_key in [("llm", "Local model", "model_available"), ("docker", "Docker image", "image_available")]:
                 detail = diagnostics.get(name, diagnostics.get("ollama", {}) if name == "llm" else {})
@@ -521,6 +622,7 @@ def main() -> None:
             if diagnostics.get("provider"):
                 st.caption(f"{diagnostics['provider']} · {diagnostics.get('model', '')}")
             st.caption("Check model and sandbox availability before starting implementation.")
+            st.caption("ClariFi has its own model selection in ClariFi Agent.")
             if st.button("Check services"):
                 with st.spinner("Checking local services…"):
                     try:
@@ -538,6 +640,13 @@ def main() -> None:
     elif page == "External applications":
         from ui.applications import render_applications
         render_applications(service.settings, navigate=lambda target: navigate("Migration Studio" if target == "migration" else target))
+    elif page == "ClariFi Agent":
+        try:
+            from ui.clarifi import financial_page
+            financial_page(service)
+        except ImportError:
+            st.header("ClariFi Agent")
+            st.info("Install requirements-clarifi.txt to enable the financial investigation agent.")
     elif page == "New workspace":
         new_workspace(service, workspace)
     elif page == "Workspace history":
