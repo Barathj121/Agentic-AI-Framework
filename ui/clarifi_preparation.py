@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 
 import pandas as pd
 import streamlit as st
@@ -39,7 +40,14 @@ def preparation_panel(service, tool):
             st.session_state.pop("clarifi_routed_files", None)
             st.rerun()
     uploads = [(file.name, file.getvalue()) for file in files] if files else seeded
-    pipeline = FinancialPreparation(service.settings)
+    mapping_provider = st.selectbox("Financial mapping model", ["Local Gemma", "Gemini Flash-Lite"],
+        index=1 if os.getenv("CLARIFI_DEFAULT_PROVIDER") == "gemini" else 0, key="cf_mapping_provider")
+    mapping_client = None
+    if mapping_provider == "Gemini Flash-Lite":
+        from workbench.agents.clarifi.models import FinancialGeminiMappingClient
+        mapping_client = FinancialGeminiMappingClient()
+        st.caption("Hosted Gemini receives source metadata and masked profile samples for mapping. Review every mapping before Docker conversion. Free-tier quota applies; there is no automatic model fallback.")
+    pipeline = FinancialPreparation(service.settings, llm=mapping_client)
     sources, assignments = [], {}
     try:
         if uploads:
@@ -60,6 +68,38 @@ def preparation_panel(service, tool):
                     frame = pd.read_csv(io.BytesIO(item.content), dtype=str, keep_default_na=False, nrows=100)
                     st.dataframe(frame, hide_index=True, width="stretch")
                 st.caption("First 100 rows per table. All supported rows are preserved during migration.")
+        canonical = None
+        if sources and len(assignments) == len(sources):
+            from workbench.agents.clarifi.preparation import canonical_input, requests_clarifi
+            try:
+                canonical = canonical_input(sources, assignments, case_id=case.strip(), tool=tool)
+            except ValueError:
+                pass  # Arbitrary source schemas continue through reviewed migration.
+        if canonical is not None and requests_clarifi(instruction):
+            st.success("These records already match the ClariFi format. AI mapping and conversion can be skipped.")
+            if st.checkbox("Use the validated format directly", key="cf_skip_migration_" + upload_hash):
+                # Retain the same Docker execution even though no conversion is needed.
+                from workbench.agents.clarifi.sandbox import FinancialSandbox
+                from ui.clarifi import scores_first_panel
+                from workbench.workspace import WorkspaceManager
+                manager = WorkspaceManager(service.settings.workspace_root / "clarifi-valid-inputs")
+                contract = input_fingerprint(canonical, "screen", None)
+                workspace_key = "cf_valid_workspace_" + contract
+                if workspace_key not in st.session_state:
+                    workspace = manager.create(case.strip(), instruction)
+                    from workbench.agents.clarifi.screening import input_hash
+                    manager.write(workspace, "metadata/source_contract.json", {
+                        "input_sha256": input_hash(canonical), "conversion": "skipped_validated_contract",
+                        "tables": list(assignments.values()),
+                        "sources": [{"filename": item.filename, "table": assignments[item.key],
+                                     "original_sha256": item.original_sha256} for item in sources]})
+                    st.session_state[workspace_key] = workspace.name
+                workspace = manager.get(st.session_state[workspace_key])
+                mode, model = model_panel(allow_remote=False)
+                scores_first_panel(service, canonical, mode, model, key="validated_" + contract,
+                                   tool_executor=FinancialSandbox(service.settings, workspace),
+                                   migration=manager.read(workspace, "metadata/source_contract.json"))
+                return
         if st.button("Create financial preparation", type="primary", disabled=not sources):
             workspace = pipeline.create(case.strip(), instruction, tool, sources, assignments)
             st.session_state["clarifi_preparation_id"] = workspace.name
@@ -88,7 +128,7 @@ def preparation_panel(service, tool):
             st.info("This saved preparation has a different capability scope. Its saved scope is used for validation and investigation.")
         migration = pipeline.migration(identifier)
         st.subheader("1 · Review migration mappings")
-        st.caption("Mapping proposals use the workbench's configured local model. Planning runs outside Docker; conversions execute only in Docker after approval.")
+        st.caption("Mapping proposals use your selected financial mapping model. Planning runs outside Docker; conversions execute only in Docker after approval.")
         ready = True
         for table, item in state["tables"].items():
             child = migration.workspace(item["workspace_id"])
@@ -126,6 +166,15 @@ def preparation_panel(service, tool):
             st.json(handoff, expanded=False)
         st.subheader("3 · Run ClariFi in the shared sandbox")
         mode, model = model_panel(allow_remote=False)
+        delivery = st.radio("Results delivery", ["Show scores first", "Wait for the full AI report"],
+                            horizontal=True, key="cf_prepared_delivery_" + identifier)
+        if delivery == "Show scores first":
+            from ui.clarifi import scores_first_panel
+            from workbench.agents.clarifi.sandbox import FinancialSandbox
+            scores_first_panel(service, data, mode, model, key="prepared_" + identifier,
+                               tool_executor=FinancialSandbox(service.settings, workspace, sandbox=pipeline.sandbox),
+                               migration=handoff)
+            return
         fingerprint = input_fingerprint(data, mode, model)
         approved = st.checkbox("I reviewed the converted evidence and approve the sandboxed ClariFi investigation",
                                key="cf_prepared_approve_" + identifier + fingerprint)

@@ -12,3 +12,6 @@ test-results-*.xml
 outputs/**/node_modules/
 outputs/**/preview-*.png
 outputs/**/*.inspect.ndjson
+
+# Temporary GitHub OIDC credential file; never package it.
+gha-creds-*.json

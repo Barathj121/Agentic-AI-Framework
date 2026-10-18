@@ -17,6 +17,7 @@ def financial_app(tmp_path, monkeypatch):
     import streamlit as st
     from workbench.service import Service
     monkeypatch.setenv('WORKSPACE_ROOT', str(tmp_path))
+    monkeypatch.setenv('CLARIFI_DEFAULT_PROVIDER', 'local')
     monkeypatch.delenv('CLARIFI_API_URL', raising=False)
     monkeypatch.setattr(Service, 'diagnostics', lambda self: {})
     st.cache_resource.clear()
@@ -87,3 +88,21 @@ def test_general_workbench_instruction_routes_before_general_proposals(financial
     assert instance.session_state['clarifi_routed_files'][0][0] == 'export.json'
     assert not calls
     assert not list(financial_app.glob('uc_*'))
+
+
+def test_valid_contract_can_skip_conversion_without_automatic_execution(financial_app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(FinancialPreparation, 'create', lambda *a, **k: calls.append('migration'))
+    monkeypatch.setattr('workbench.agents.clarifi.sandbox.FinancialSandbox.__call__', lambda *a, **k: calls.append('sandbox'))
+    instance = app()
+    instance.session_state['clarifi_capability'] = 'Combined investigation'
+    instance.session_state['clarifi_routed_files'] = [('export.json', sample_input('combined').model_dump_json().encode())]
+    instance.run()
+    assert not instance.exception
+    assert any('already match' in x.value for x in instance.success)
+    next(x for x in instance.checkbox if x.label == 'Use the validated format directly').check().run()
+    assert not instance.exception
+    assert button(instance, 'Run Investigation').disabled
+    assert not calls
+    assert not list(financial_app.glob('clarifi-pipelines/uc_*'))
+    assert list(financial_app.glob('clarifi-valid-inputs/uc_*'))

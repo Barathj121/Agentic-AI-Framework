@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from functools import lru_cache
 from typing import Annotated, Literal
 
 from pydantic import Field, create_model
@@ -112,13 +113,40 @@ class VertexReasoner:
         return self._generate(Narrative, DRAFT_INSTRUCTION, context)
 
 
+def _secret_manager_key(resource):
+    """Fetch a pinned secret with application identity; never expose its contents in errors."""
+    import re
+    # A pinned version makes process-lifetime caching and explicit rotation predictable.
+    if not re.fullmatch(r"projects/[a-z0-9-]+/secrets/[A-Za-z0-9_-]+/versions/[0-9]+", resource):
+        raise ValueError("Configure a pinned Gemini Secret Manager version")
+    return _cached_secret_key(resource)
+
+
+@lru_cache(maxsize=4)
+def _cached_secret_key(resource):
+    import base64
+    try:
+        import google.auth
+        from google.auth.transport.requests import AuthorizedSession
+        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        with AuthorizedSession(credentials) as session:
+            response = session.get("https://secretmanager.googleapis.com/v1/" + resource + ":access", timeout=15)
+            response.raise_for_status()
+            return base64.b64decode(response.json()["payload"]["data"], validate=True).decode("utf-8").strip()
+    except Exception:
+        raise ValueError("Gemini credential could not be loaded from Secret Manager; check application identity and secret access") from None
+
+
 def gemini_api_config():
     """Read local ignored configuration without copying credentials into reports."""
     from dotenv import dotenv_values
     path = Path(__file__).resolve().parents[3] / ".env"
     local = dotenv_values(path) if path.is_file() else {}
+    key = os.environ.get("GEMINI_API_KEY") or local.get("GEMINI_API_KEY", "")
+    if not key and os.environ.get("CLARIFI_GEMINI_SECRET_VERSION"):
+        key = _secret_manager_key(os.environ["CLARIFI_GEMINI_SECRET_VERSION"])
     return {
-        "key": os.environ.get("GEMINI_API_KEY") or local.get("GEMINI_API_KEY", ""),
+        "key": key,
         "model": os.environ.get("CLARIFI_API_MODEL") or local.get("CLARIFI_API_MODEL") or DEFAULT_API_MODEL,
     }
 
@@ -177,6 +205,17 @@ class GeminiAPIReasoner(VertexReasoner):
 
     def _generate(self, schema, instruction, payload):
         response_schema = gemini_json_schema(schema.model_json_schema())
+        if schema.__name__ in {"FinancialMappingPlan", "SqlTransformationPlan", "PythonTransformationPlan"}:
+            # Large upper array bounds multiply decoder states across each target
+            # field. Enforce them with the original schema after generation instead.
+            def relax_arrays(value):
+                if isinstance(value, dict):
+                    return {key: relax_arrays(item) for key, item in value.items()
+                            if key not in {"maxItems", "minItems"}}
+                if isinstance(value, list):
+                    return [relax_arrays(item) for item in value]
+                return value
+            response_schema = relax_arrays(response_schema)
         if schema is Narrative:
             # Tight large-array bounds can make Google's constrained schema
             # reject a 25-finding draft. Pydantic still caps claims, and the
@@ -321,3 +360,17 @@ class RulesReasoner:
             "explanation": f"{f['disposition']}; triage score {f['score']}/100. " + " ".join(f["gaps"][:2]),
             "evidence_ids": f["evidence_ids"][:10],
         } for f in context["findings"]], next_steps=["Corroborate identity, access and commercial purpose with an analyst."])
+
+
+class FinancialGeminiMappingClient:
+    """Explicit hosted option for financial preparation only; general migration stays local."""
+    def __init__(self, model=None):
+        self.model = model or os.environ.get('CLARIFI_API_MODEL', DEFAULT_API_MODEL)
+
+    def structured(self, schema, system, prompt):
+        from workbench.llm import LLMError
+        try:
+            return GeminiAPIReasoner(self.model)._generate(schema, system, json.loads(prompt))
+        except Exception:
+            # SDK/Pydantic errors may contain supplied metadata or model output.
+            raise LLMError('Financial Gemini mapping did not complete. Check free-tier quota, model access and the source contract. No mapping was approved automatically.') from None

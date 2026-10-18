@@ -1,0 +1,90 @@
+name: Deploy main to GCP
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch, tag or full commit SHA to deploy manually
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'Barathj121/Agentic-AI-Framework' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      revision: ${{ steps.source.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.sha }}
+      - name: Resolve the requested source commit
+        id: source
+        run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-clarifi.txt
+      - run: python -m pip install -r requirements-clarifi.txt
+      - name: Build the existing Docker sandbox
+        run: docker build -t agentic-workbench-sandbox:latest -f sandbox/Dockerfile .
+      - name: Build the existing external-app test fixture
+        run: docker build -t workbench-launcher-demo:latest -f examples/external_app/Dockerfile .
+      - name: Verify application and Docker execution
+        run: python -m pytest -m 'not live_ollama' -q
+
+  deploy:
+    needs: verify
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.repository == 'Barathj121/Agentic-AI-Framework'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    concurrency:
+      group: gcp-main-deployment
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'project-834ebdfa-aa5e-417f-b09' }}
+      ZONE: ${{ vars.GCP_ZONE || 'us-central1-a' }}
+      VM: ${{ vars.GCP_VM_NAME || 'clarifi-demo-vm' }}
+      DEPLOY_REVISION: ${{ needs.verify.outputs.revision }}
+      PUBLIC_URL: ${{ vars.GCP_PUBLIC_URL || 'https://clarifi-demo-web-n65xgyqlaa-uc.a.run.app' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.revision }}
+      - name: Validate configuration and requested revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${PROJECT_ID:?Set GCP_PROJECT_ID repository variable}"
+          : "${ZONE:?Set GCP_ZONE repository variable}"
+          : "${VM:?Set GCP_VM_NAME repository variable}"
+          : "${PUBLIC_URL:?Set GCP_PUBLIC_URL repository variable}"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            latest=$(python3 -c 'import json,os,urllib.request; request=urllib.request.Request("https://api.github.com/repos/Barathj121/Agentic-AI-Framework/git/ref/heads/main",headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"User-Agent":"ClariFi-main-deployment"}); print(json.load(urllib.request.urlopen(request,timeout=20))["object"]["sha"])')
+            [[ "$latest" == "$GITHUB_SHA" && "$DEPLOY_REVISION" == "$GITHUB_SHA" ]] || { echo 'A newer main revision exists; skipping stale deployment.'; exit 1; }
+          fi
+          python3 deploy/gcp/package.py "$RUNNER_TEMP/workbench-source.tar.gz" --revision "$DEPLOY_REVISION"
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER || 'projects/342614326962/locations/global/workloadIdentityPools/clarifi-github-main/providers/github' }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT || 'clarifi-main-deploy@project-834ebdfa-aa5e-417f-b09.iam.gserviceaccount.com' }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Update existing VM and verify the Cloud Run URL
+        run: bash deploy/gcp/update.sh "$RUNNER_TEMP/workbench-source.tar.gz" "$DEPLOY_REVISION"

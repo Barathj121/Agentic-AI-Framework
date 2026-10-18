@@ -15,3 +15,6 @@ workbench/agents/clarifi/*
 !examples/
 !examples/external_app/
 !examples/external_app/app.py
+
+# Temporary GitHub OIDC credential file; never package it.
+gha-creds-*.json

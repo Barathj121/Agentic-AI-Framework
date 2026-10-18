@@ -3,3 +3,6 @@
 !deploy/gcp/
 !deploy/gcp/gateway/
 !deploy/gcp/gateway/nginx.conf.template
+
+# Temporary GitHub OIDC credential file; never package it.
+gha-creds-*.json

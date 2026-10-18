@@ -193,7 +193,7 @@ def model_panel(*, allow_remote=True):
                 st.error("Cloud service check failed. Check service identity and configuration.")
         return "remote", model
     choice = st.selectbox("Reasoning model", ["Local Gemma via Ollama", "Gemini API · AI Studio", "Gemini on Vertex AI", "Offline rules demo"],
-                          key="clarifi_model_choice")
+                          index=1 if os.getenv("CLARIFI_DEFAULT_PROVIDER") == "gemini" else 0, key="clarifi_model_choice")
     mode = {"Local Gemma via Ollama": "local", "Gemini API · AI Studio": "gemini", "Gemini on Vertex AI": "vertex", "Offline rules demo": "rules"}[choice]
     model = None
     if mode == "local":
@@ -231,7 +231,12 @@ def model_panel(*, allow_remote=True):
                 st.warning("Model is not ready. Start Ollama and download the selected model before running.")
     elif mode == "gemini":
         from workbench.agents.clarifi.models import API_MODELS, GeminiAPIReasoner, gemini_api_config
-        config = gemini_api_config()
+        try:
+            config = gemini_api_config()
+        except ValueError:
+            from workbench.agents.clarifi.models import DEFAULT_API_MODEL
+            config = {"key": "", "model": os.getenv("CLARIFI_API_MODEL", DEFAULT_API_MODEL)}
+            st.warning("Gemini credentials are currently unavailable. You can still run scores-first screening; check the server secret configuration before requesting an AI draft.")
         options = list(API_MODELS)
         if config["model"] not in options:
             options.append(config["model"])
@@ -239,14 +244,9 @@ def model_panel(*, allow_remote=True):
         selected = st.selectbox("Google AI model", options + [custom], index=options.index(config["model"]),
                                 format_func=lambda key: API_MODELS.get(key, {}).get("label", key), key="clarifi_google_model")
         model = st.text_input("Gemini API model ID", value=config["model"], key="clarifi_api_model") if selected == custom else selected
-        st.caption(API_MODELS.get(model, {}).get("description", "Custom model: verify compatibility and project access."))
-        st.caption("Uses the key configured on this machine for Gemini or hosted Gemma. Planning and evidence-linked drafts are sent to Google's API.")
-        st.caption("Each completed investigation normally uses two model requests: planning and the analyst draft. Quotas depend on your project. Switching models requires a new investigation approval.")
-        st.caption("Live/audio, image and embedding models are not investigation model choices. Offline rules demo calls no AI model.")
-        if config["key"]:
-            st.caption("API key configured locally · value hidden")
-        else:
-            st.warning("Add GEMINI_API_KEY to the local .env file before running.")
+        st.caption("Explains financial risk signals and suggests next steps for your review.")
+        if not config["key"]:
+            st.warning("AI explanations are unavailable. You can still review financial scores; contact the application administrator to enable AI.")
         if st.button("Check Gemini API", key="clarifi_gemini_check"):
             try:
                 health = GeminiAPIReasoner(model).health()
@@ -307,6 +307,9 @@ def render_results(bundle, key="current"):
     st.caption(f"{report['case_id']} · {model} · {provider} · {report['created_at']}")
     if report["provenance"]["ai_used"]:
         st.success("Model-backed investigation completed · evidence references and score contributions verified")
+    elif report.get("status") == "SCREENED":
+        st.success("Financial screening saved · scores and evidence verified")
+        st.caption("AI analyst draft has not been requested. Scores are computed by reviewed financial tools.")
     else:
         st.info("Offline rules report · no AI model was called")
     selection = st.radio("Findings to display", ["High-priority review", "All findings"], horizontal=True,
@@ -351,6 +354,8 @@ def render_results(bundle, key="current"):
         if selected:
             render_finding(next(f for f in findings if f["finding_id"] == selected), source)
     with narrative:
+        if report.get("status") == "SCREENED":
+            st.info("Generate an AI analyst draft after reviewing the scores. Your screening results are already saved.")
         st.caption("Draft explanations require analyst review. Citation checks do not establish that the text is semantically correct.")
         st.write("**Investigation plan**")
         st.write(report["plan"]["rationale"])
@@ -438,47 +443,52 @@ def financial_page(service):
     with config:
         st.subheader("2 · Choose the model")
         mode, model = model_panel()
-    fingerprint = input_fingerprint(data, mode, model) if data else None
-    approved = st.checkbox("I have reviewed the input and approve this investigation", key=f"clarifi_approve_{fingerprint}")
-    unavailable = not data or not approved or (mode != "rules" and not model)
-    if st.button("Run Investigation", type="primary", disabled=unavailable, key="clarifi_run"):
-        st.session_state.pop("clarifi_current_result", None)
-        st.session_state.pop("clarifi_reopened_bundle", None)
-        try:
-            with st.status("Running the approved investigation…", expanded=True) as status:
-                st.write("The agent plans reviewed tool calls, computes financial signals, checks evidence and drafts the analyst report.")
-                from time import monotonic
-                from workbench.agents.clarifi.progress import track_progress
-                started = monotonic()
-                progress_note = st.empty()
-                def update_progress(event):
-                    status.update(label=event["message"])
-                    progress_note.caption(f"Elapsed {monotonic() - started:.0f} seconds · CPU model requests can take several minutes. Avoid submitting the same investigation again while it runs.")
-                with track_progress(update_progress):
-                    report = service.run_agent("clarifi", data.model_dump(mode="json"), approved=True, mode=mode, model=model)
-                location = save_bundle(service.settings.workspace_root, data, report)
-                bundle = {"input": data.model_dump(mode="json"), "report": report}
-                st.session_state["clarifi_current_result"] = {"fingerprint": fingerprint, "bundle": bundle}
-                status.update(label="Investigation completed and saved" if mode == "remote" else "Investigation completed and saved locally", state="complete", expanded=False)
-                if report.get("evidence_uri"):
-                    st.caption("Cloud evidence bundle: " + report["evidence_uri"])
-                st.caption(f"Saved evidence bundle: {location.name}")
-        except Exception as error:
-            # Local adapter errors are redacted by the shared client; do not echo
-            # raw Pydantic/model/cloud exceptions that may contain submitted rows.
-            from workbench.llm import LLMError
-            from workbench.agents.clarifi.remote import RemoteClariFiError
-            if isinstance(error, (LLMError, RemoteClariFiError)):
-                st.error(str(error))
-            elif isinstance(error, RuntimeError) and str(error).startswith(("Gemini API request failed (HTTP ", "Gemini request ", "Gemini could not be reached.")):
-                st.error(str(error))
-            else:
-                st.error("The investigation did not complete. Check model readiness, configuration and input scope. No new result was saved.")
-    result = st.session_state.get("clarifi_current_result")
-    if result and result["fingerprint"] != fingerprint:
-        st.info("Input or model selection changed. Run a new investigation to see results for this selection.")
-    elif result and not st.session_state.get("clarifi_reopened_bundle"):
-        render_results(result["bundle"])
+    delivery = st.radio("Results delivery", ["Show scores first", "Wait for the full AI report"],
+                        horizontal=True, key="clarifi_delivery_mode")
+    if delivery == "Show scores first":
+        scores_first_panel(service, data, mode, model)
+    else:
+        fingerprint = input_fingerprint(data, mode, model) if data else None
+        approved = st.checkbox("I have reviewed the input and approve this investigation", key=f"clarifi_approve_{fingerprint}")
+        unavailable = not data or not approved or (mode != "rules" and not model)
+        if st.button("Run Investigation", type="primary", disabled=unavailable, key="clarifi_run"):
+            st.session_state.pop("clarifi_current_result", None)
+            st.session_state.pop("clarifi_reopened_bundle", None)
+            try:
+                with st.status("Running the approved investigation…", expanded=True) as status:
+                    st.write("The agent plans reviewed tool calls, computes financial signals, checks evidence and drafts the analyst report.")
+                    from time import monotonic
+                    from workbench.agents.clarifi.progress import track_progress
+                    started = monotonic()
+                    progress_note = st.empty()
+                    def update_progress(event):
+                        status.update(label=event["message"])
+                        progress_note.caption(f"Elapsed {monotonic() - started:.0f} seconds · CPU model requests can take several minutes. Avoid submitting the same investigation again while it runs.")
+                    with track_progress(update_progress):
+                        report = service.run_agent("clarifi", data.model_dump(mode="json"), approved=True, mode=mode, model=model)
+                    location = save_bundle(service.settings.workspace_root, data, report)
+                    bundle = {"input": data.model_dump(mode="json"), "report": report}
+                    st.session_state["clarifi_current_result"] = {"fingerprint": fingerprint, "bundle": bundle}
+                    status.update(label="Investigation completed and saved" if mode == "remote" else "Investigation completed and saved locally", state="complete", expanded=False)
+                    if report.get("evidence_uri"):
+                        st.caption("Cloud evidence bundle: " + report["evidence_uri"])
+                    st.caption(f"Saved evidence bundle: {location.name}")
+            except Exception as error:
+                # Local adapter errors are redacted by the shared client; do not echo
+                # raw Pydantic/model/cloud exceptions that may contain submitted rows.
+                from workbench.llm import LLMError
+                from workbench.agents.clarifi.remote import RemoteClariFiError
+                if isinstance(error, (LLMError, RemoteClariFiError)):
+                    st.error(str(error))
+                elif isinstance(error, RuntimeError) and str(error).startswith(("Gemini API request failed (HTTP ", "Gemini request ", "Gemini could not be reached.")):
+                    st.error(str(error))
+                else:
+                    st.error("The investigation did not complete. Check model readiness, configuration and input scope. No new result was saved.")
+        result = st.session_state.get("clarifi_current_result")
+        if result and result["fingerprint"] != fingerprint:
+            st.info("Input or model selection changed. Run a new investigation to see results for this selection.")
+        elif result and not st.session_state.get("clarifi_reopened_bundle"):
+            render_results(result["bundle"])
     with st.expander("Reopen a saved financial investigation"):
         root = Path(service.settings.workspace_root).resolve()
         directory = root / "clarifi"
@@ -500,3 +510,64 @@ def financial_page(service):
             st.session_state.pop("clarifi_reopened_bundle")
             st.rerun()
         render_results(reopened, key="saved")
+
+
+def scores_first_panel(service, data, mode, model, *, key="direct", tool_executor=None, migration=None):
+    """Persist evidence before optional model generation; selection changes cannot erase scores."""
+    from workbench.agents.clarifi.screening import screen, draft
+    fingerprint = input_fingerprint(data, "screen", None) if data else None
+    state_key = "clarifi_screen_" + key
+    approved = st.checkbox("I have reviewed the input and approve this investigation",
+                           key=f"clarifi_screen_approve_{key}_{fingerprint}")
+    if st.button("Run Investigation", type="primary", disabled=not data or not approved,
+                 key="clarifi_screen_run_" + key):
+        try:
+            with st.spinner("Computing and verifying financial scores…"):
+                from time import monotonic
+                started = monotonic()
+                report = screen(data, approved=True, tool_executor=tool_executor)
+                if migration:
+                    report["provenance"]["migration"] = migration
+                save_bundle(service.settings.workspace_root, data, report)
+                bundle = {"input": data.model_dump(mode="json"), "report": report}
+                st.session_state[state_key] = {"fingerprint": fingerprint, "bundle": bundle,
+                                               "seconds": monotonic() - started}
+                st.session_state.pop("clarifi_reopened_bundle", None)
+        except Exception:
+            st.error("Screening did not complete. Check the input and sandbox execution logs. No incomplete scores were saved.")
+    result = st.session_state.get(state_key)
+    if not result or result["fingerprint"] != fingerprint:
+        if result:
+            st.info("Input changed. Review and run screening for these records.")
+        return
+    st.caption(f"Verified screening completed and saved in {result['seconds']:.2f} seconds. AI drafting is a separate step.")
+    # Render first, so a slow or failed model cannot hide the verified queue.
+    render_results(result["bundle"], key="screen_" + key)
+    if mode == "rules":
+        st.caption("Select Gemini or Gemma to add an AI analyst draft.")
+        return
+    draft_fp = input_fingerprint(data, mode, model)
+    consent = st.checkbox("Generate an AI analyst draft using the selected model",
+                          key=f"clarifi_draft_approve_{key}_{fingerprint}_{draft_fp}")
+    if st.button("Generate AI analyst draft", disabled=not consent or not model,
+                 key="clarifi_draft_run_" + key):
+        try:
+            with st.spinner("Generating the AI analyst draft. Your verified scores are already saved above…"):
+                if mode == "remote":
+                    from workbench.agents.clarifi.remote import draft as remote_draft
+                    report = remote_draft(data, result["bundle"]["report"], approved=True, model=model)
+                else:
+                    report = draft(data, result["bundle"]["report"], approved=True, mode=mode,
+                                   model=model, tool_executor=tool_executor)
+                if migration:
+                    report["provenance"]["migration"] = migration
+                save_bundle(service.settings.workspace_root, data, report)
+                result["draft"] = {"fingerprint": draft_fp,
+                                   "bundle": {"input": data.model_dump(mode="json"), "report": report}}
+        except Exception:
+            st.error("AI drafting did not complete. Your verified screening is saved and remains available above. Check model readiness, quota and connection before trying again.")
+    completed = result.get("draft")
+    if completed and completed["fingerprint"] == draft_fp:
+        render_results(completed["bundle"], key="draft_" + key)
+    elif completed:
+        st.info("The saved AI draft belongs to a different model selection. Review the new model before requesting another draft.")

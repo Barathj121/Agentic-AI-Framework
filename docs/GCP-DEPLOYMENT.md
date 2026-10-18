@@ -361,3 +361,11 @@ investigation with two 95-point review findings. This verifies that browser path
 it does not establish that every earlier browser session remained connected.
 The local regression suite passed 426 tests, with 20 Docker/live tests deselected.
 Gemma 4 remains an explicitly selected experimental CPU option.
+
+## Main-only application updates
+
+For the existing VM installation, use the [main deployment workflow](MAIN-DEPLOYMENT.md).
+Only pushes to `main` trigger automatic deployment. Explicit manual deployments
+can still select a branch or commit. It keeps the application flow and
+Docker restrictions unchanged and updates the existing VM behind the same Cloud
+Run gateway. It never reruns the fresh installer or upgrades billing.
