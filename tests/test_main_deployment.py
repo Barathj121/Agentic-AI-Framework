@@ -145,6 +145,29 @@ def test_update_scripts_have_valid_shell_syntax():
         assert result.returncode == 0, result.stderr
 
 
+def test_release_smoke_check_imports_packaged_runtime_from_workspace(tmp_path):
+    """Exercise the actual smoke-check code with the sandbox's file layout."""
+    import shlex
+    import shutil
+
+    runtime_root = tmp_path / 'opt/workbench'
+    package = runtime_root / 'clarifi_runtime'
+    package.mkdir(parents=True)
+    for name in ['__init__.py', 'schemas.py', 'tools.py']:
+        shutil.copyfile(ROOT / 'workbench/agents/clarifi' / name, package / name)
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    script = (ROOT / 'deploy/gcp/update-vm.sh').read_text()
+    smoke = script[script.index('docker run --rm'):].split('\n# Preserve', 1)[0]
+    arguments = shlex.split(smoke.replace('\\\n', ' '))
+    command = arguments[arguments.index('python'):]
+    command[0] = sys.executable
+    # Substitute only the container filesystem root, preserving the actual check.
+    command[-1] = command[-1].replace('/opt/workbench', str(runtime_root))
+    result = subprocess.run(command, cwd=workspace, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize('recovery_fails', [False, True])
 @pytest.mark.parametrize('had_env', [False, True])
 def test_failed_activation_restores_release_and_reports_failed_recovery(tmp_path, recovery_fails, had_env):

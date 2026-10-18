@@ -46,7 +46,7 @@ IMAGE="agentic-workbench-sandbox:$REVISION"
 docker build -t "$IMAGE" -f sandbox/Dockerfile .
 docker run --rm --network none --user 10001:10001 --read-only --cap-drop ALL \
   --security-opt no-new-privileges:true --pids-limit 128 --memory 512m --cpus 1 \
-  "$IMAGE" python -c 'from clarifi_runtime.schemas import InvestigationInput; from clarifi_runtime.tools import TOOLS; assert TOOLS'
+  "$IMAGE" python -I -c 'import sys; sys.path.insert(0, "/opt/workbench"); from clarifi_runtime.schemas import InvestigationInput; from clarifi_runtime.tools import TOOLS; assert TOOLS'
 # Preserve the current environment, models, workspaces and application workflow.
 # Both services continue using /opt/agentic-workbench and the existing systemd units.
 PREVIOUS=$(readlink -f "$CURRENT")
